@@ -169,6 +169,102 @@ honest time estimate remain pending. Earlier overview/next-step notes above
 are retained from the RES-101 checkpoint; this section records the subsequent
 RES-102 work without revising unrelated sections.
 
+## RES-103 — Requests pile up the longer you browse
+
+### Reproduction
+
+Manual procedure derived from the code: start a fresh session, open deal A
+from Home, go back and wait for the transition to finish, repeat for B, then
+open C and add one item so the cart count actually increases. Watch
+`re-checking availability for deal ...` and `GET /deals/<id>` logs. Before the
+fix, closed controllers for A and B still request availability alongside C.
+Reopening the same deal repeatedly can also accumulate requests for one ID.
+This procedure was not performed on the emulator during this validation;
+the leak was reproduced deterministically with controller lifecycle tests.
+
+### Root cause and resource ownership
+
+Each DealDetailsController.onInit calls ever on the session-wide CartService's
+itemCount. GetX's ever creates a stream subscription and returns a Worker that
+can cancel it. The original controller discarded that Worker and had no
+onClose cleanup. Deleting the controller from GetX did not cancel the external
+subscription. Its callback retained the old controller and kept calling
+_recheckAvailability, which calls DealRepo.fetchById for that controller's deal.
+
+The subscription is owned by each DealDetailsController, while CartService
+intentionally outlives the detail routes. Store the Worker in a nullable field
+and dispose it in onClose before super.onClose. Nullable cleanup also tolerates
+initialization ending before the Worker is created. This does not fix missing
+route arguments (RES-107).
+
+### Alternatives considered
+
+- Debouncing or throttling does not release the stale subscriptions, so it
+  would only reduce symptoms rather than fix ownership.
+- Making CartService short-lived would change shared bag behavior and does
+  not assign cleanup to the controller that created the subscription.
+- Checking isClosed only inside the callback would suppress requests but
+  leave the subscription registered. Worker.dispose removes the listener.
+- Moving cleanup to a widget would split ownership unnecessarily; this
+  Worker is created by the controller and belongs in its onClose.
+
+### Edge cases and performance
+
+- Tests cover closed controllers, active stock updates, reopening the same
+  deal three times, and cart changes after all controllers are closed.
+- Adds that hit the stock limit might not change itemCount; reproduction must
+  use an actual count change. The tests also use clear after deletion.
+- Cancellation prevents future subscription events, but does not cancel an
+  already-started fetchById Future. Completion after closure, overlapping
+  active requests and async error handling remain unchanged.
+- A route covered by another route is not necessarily disposed; legitimately
+  active controllers may still listen. Tests use Get.delete, not route pops.
+- Before the fix, each count event fans out to historical controller instances;
+  after it, fan-out is limited to controllers whose subscriptions remain active.
+  Cancelling subscriptions removes their retained callback references. No
+  heap snapshot, frame timing or memory reduction was measured, so no numeric
+  memory/performance improvement is claimed.
+
+### Verification evidence
+
+Verified on 2026-09-08 (local time) with Flutter 3.27.0, framework 8495dee1fd,
+Dart 3.6.0. Tests use real Get.put/Get.delete lifecycle and a shared real
+CartService, with a recording DealRepo returning deterministic stock values.
+Route arguments are supplied through Get.routing.args; no HTTP/API latency,
+snackbar, or full screen navigation is involved.
+
+- Before: ran `flutter test --no-pub test/deal_details_controller_test.dart`
+  in `build/res103_before_validation/`, with the identical final test file and
+  the controller restored only in that copy from HEAD
+  `6cdec4502c11b6c1eb448e643065f828ecbc93ab`. Both tests failed (exit 1).
+  Closed-controller case: expected requested IDs `[3]`, actual `[1, 2, 3]`.
+  Reopen case on the second visit: expected `[42, 42]`, actual `[42, 42, 42]`.
+- After: `flutter test --no-pub` in the working tree passed all 11 tests
+  (2 RES-103, 2 RES-102, 6 RES-101, 1 model; exit 0). The active controller
+  refreshed stock from 10 to 7, and clearing the cart after controller deletion
+  produced no additional repository calls.
+- Working production code was never reverted for the before run. Only the
+  Worker field, assignment and onClose cleanup changed in production.
+
+### Q1 relevance
+
+RES-103 complements RES-102: the countdown timer belongs to Widget State and
+is cancelled in dispose, whereas this Worker belongs to GetxController and
+is disposed in onClose. Neither widget removal nor deleting a controller
+automatically cancels every externally registered subscription. Cleanup must
+follow the resource owner's lifecycle.
+
+### Process and AI correction
+
+Codex implemented the approved fix, tests and this section. Its first test
+draft incorrectly used `await Get.reset()`; compilation reported that the
+expression has type void. Codex removed await and reran the identical corrected
+tests before/after. That compilation failure is not counted as proof of the
+production bug. This is an actual AI error caught by the compiler and corrected
+by Codex, not a claim that the candidate independently caught it. Candidate
+review and the actual time estimate remain pending. Earlier document sections
+are retained as prior checkpoints, per the RES-103-only documentation scope.
+
 ## AI usage log
 
 Used Codex to explain architecture, interpret logs, propose request-version
