@@ -82,6 +82,93 @@ ignores their stale outcomes rather than cancelling backend work.
   clear-during-loading checks on the emulator are still pending. No new manual
   emulator run was performed during this before/after validation.
 
+## RES-102 — Crash after leaving My orders
+
+### Reproduction and root cause
+
+Manual reproduction procedure derived from the code: start a fresh app session,
+open My orders from Home, wait until an Active order's countdown is visible,
+then navigate back and wait 2–3 seconds after the route transition. The seed
+contains active orders with pickup starts 18, 47 and 132 minutes after API
+initialization. Leaving before data loads might not create a countdown and
+therefore might not reproduce this crash. This manual procedure was not run
+on the emulator during this ticket's validation.
+
+The crash was reproduced deterministically in a widget test: mount
+PickupCountdown, remove it from the tree before its first tick, then advance
+test time by one second. Original code throws `setState() called after dispose()`
+from the timer callback in `pickup_countdown.dart:22` and leaves a periodic
+timer pending at test teardown.
+
+The State created a periodic timer in initState but did not retain or cancel
+it. Disposing the widget did not stop the timer; its closure continued to
+reference the disposed State and invoke setState every second.
+
+### Fix and rejected alternative
+
+Keep the Timer in a `late final` State field, assign it in initState, and call
+cancel in State.dispose before super.dispose. The widget owns this resource,
+so it must release it when that particular State is removed. Cancellation
+prevents both callbacks after disposal and the continuing periodic work.
+No changes to the orders controller, backend, dependencies or toolchain are
+needed.
+
+A mounted guard alone was rejected: it can suppress setState after disposal,
+but the timer would continue waking up and retaining its callback. The widget
+test binding's pending-timer check also protects against that incomplete fix.
+
+### Edge cases and known limitations
+
+- Disposal before the first tick is explicitly tested.
+- A second test verifies timer-triggered rebuilds while mounted and cleanup
+  over two mount/dispose cycles, including disposal after a tick.
+- Tests use simulated timer time and a fixed future pickupStart. The rebuild
+  check compares the newly built Text widget, not elapsed countdown text:
+  advancing widget-test time does not itself advance DateTime.now().
+- Multiple simultaneous countdowns each own their own timer; this is not
+  separately exercised by the current tests.
+- The timer still runs while the pickup window is already open. Optimizing
+  that existing behavior and exact countdown formatting are outside this fix.
+- Exiting while the orders API call is pending is not the cause of this
+  setState crash and is not changed here.
+- These are isolated widget tests, not a full route/navigation or emulator
+  integration test.
+
+### Verification evidence
+
+Verified on 2026-09-08 (local time) with Flutter 3.27.0, framework 8495dee1fd,
+Dart 3.6.0.
+
+- Before: copied sources and the new test into `build/res102_before_validation/`
+  and replaced only that copy's countdown file with the version from HEAD
+  `41d44607e29570fbebdc644c89aff16d0a82373b`. Ran
+  `flutter test --no-pub test/pickup_countdown_test.dart`: 0 passed, 2 failed,
+  exit code 1. Output included the disposed-State error and pending timer
+  assertion. The working production file was not reverted.
+- After: ran `flutter test --no-pub` against the working tree: all 9 tests
+  passed, exit code 0 (2 countdown tests, 6 RES-101 tests, 1 model test).
+- Production changes are restricted to timer ownership and cancellation in
+  `lib/feature/order/widget/pickup_countdown.dart`.
+
+### Q1 relevance
+
+OrdersController uses GetX's onInit to load data; GetX manages its onClose when
+the route-associated dependency is deleted. PickupCountdown is a separate
+StatefulWidget whose State is initialized and disposed by Flutter's widget
+tree. A single controller can serve several countdown States, and a State can
+be removed independently of the controller. Controller deletion does not
+automatically cancel timers created by child widgets. RES-102 demonstrates
+why resources must be cleaned up in their owner's lifecycle: this timer belongs
+in State.dispose, not OrdersController.onClose.
+
+### Process note
+
+Codex implemented the approved minimal fix, wrote the widget tests, ran the
+before/after checks, and drafted this RES-102 section. Candidate review and an
+honest time estimate remain pending. Earlier overview/next-step notes above
+are retained from the RES-101 checkpoint; this section records the subsequent
+RES-102 work without revising unrelated sections.
+
 ## AI usage log
 
 Used Codex to explain architecture, interpret logs, propose request-version
