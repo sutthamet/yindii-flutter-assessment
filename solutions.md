@@ -1,8 +1,11 @@
-# Assessment notes — work in progress
+# Assessment solutions
 
-Only RES-101 has been worked on so far. This document is not yet a complete
-submission. Automated RES-101 validation is complete; final written
-deliverables and candidate review remain pending.
+RES-101 through RES-107 have been implemented and validated as described
+below. Part B features have not been implemented; that decision remains open.
+Per-ticket test totals are historical checkpoints; the latest verified full
+suite passed 46 tests on Flutter 3.27.0. Manual checks and limitations are
+identified separately. The retrospective time estimate and remaining work are
+summarized at the end.
 
 ## RES-101 — Search shows results for the wrong query
 
@@ -79,7 +82,7 @@ ignores their stale outcomes rather than cancelling backend work.
   The logged latest-request exception is deliberately injected by the recovery
   test and is not a suite failure.
 - A later screenshot shows sushi deals for `sushi`. Repeated fast typing and
-  clear-during-loading checks on the emulator are still pending. No new manual
+  clear-during-loading checks on the emulator were not recorded. No new manual
   emulator run was performed during this before/after validation.
 
 ## RES-102 — Crash after leaving My orders
@@ -150,25 +153,6 @@ Dart 3.6.0.
 - Production changes are restricted to timer ownership and cancellation in
   `lib/feature/order/widget/pickup_countdown.dart`.
 
-### Q1 relevance
-
-OrdersController uses GetX's onInit to load data; GetX manages its onClose when
-the route-associated dependency is deleted. PickupCountdown is a separate
-StatefulWidget whose State is initialized and disposed by Flutter's widget
-tree. A single controller can serve several countdown States, and a State can
-be removed independently of the controller. Controller deletion does not
-automatically cancel timers created by child widgets. RES-102 demonstrates
-why resources must be cleaned up in their owner's lifecycle: this timer belongs
-in State.dispose, not OrdersController.onClose.
-
-### Process note
-
-Codex implemented the approved minimal fix, wrote the widget tests, ran the
-before/after checks, and drafted this RES-102 section. Candidate review and an
-honest time estimate remain pending. Earlier overview/next-step notes above
-are retained from the RES-101 checkpoint; this section records the subsequent
-RES-102 work without revising unrelated sections.
-
 ## RES-103 — Requests pile up the longer you browse
 
 ### Reproduction
@@ -195,7 +179,7 @@ The subscription is owned by each DealDetailsController, while CartService
 intentionally outlives the detail routes. Store the Worker in a nullable field
 and dispose it in onClose before super.onClose. Nullable cleanup also tolerates
 initialization ending before the Worker is created. This does not fix missing
-route arguments (RES-107).
+route arguments; that separate issue was subsequently addressed in RES-107.
 
 ### Alternatives considered
 
@@ -246,25 +230,6 @@ snackbar, or full screen navigation is involved.
 - Working production code was never reverted for the before run. Only the
   Worker field, assignment and onClose cleanup changed in production.
 
-### Q1 relevance
-
-RES-103 complements RES-102: the countdown timer belongs to Widget State and
-is cancelled in dispose, whereas this Worker belongs to GetxController and
-is disposed in onClose. Neither widget removal nor deleting a controller
-automatically cancels every externally registered subscription. Cleanup must
-follow the resource owner's lifecycle.
-
-### Process and AI correction
-
-Codex implemented the approved fix, tests and this section. Its first test
-draft incorrectly used `await Get.reset()`; compilation reported that the
-expression has type void. Codex removed await and reran the identical corrected
-tests before/after. That compilation failure is not counted as proof of the
-production bug. This is an actual AI error caught by the compiler and corrected
-by Codex, not a claim that the candidate independently caught it. Candidate
-review and the actual time estimate remain pending. Earlier document sections
-are retained as prior checkpoints, per the RES-103-only documentation scope.
-
 ## RES-104 — Duplicate deals in the home feed
 
 ### Reproduction and root cause
@@ -313,7 +278,8 @@ Rejected alternatives: deduplicating by ID after append would hide corrupted
 pagination; resetting flags alone would leave stale callbacks able to mutate
 state; ignoring refresh during load-more would discard the user's action;
 waiting for old requests would delay refresh unnecessarily. No backend change,
-package change, Home UI/Obx restructure or RES-105 optimization is included.
+package change, Home UI/Obx restructure or RES-105 optimization was included
+in the RES-104 change; the later rendering work is documented under RES-105.
 
 ### Deterministic tests and verification evidence
 
@@ -362,22 +328,6 @@ both runs; the working production file was not reverted.
 - Failed initial refresh now reports refresh failure locally and leaves zero
   accepted pages. Full initial-loading UX is not covered by this test suite.
 
-### Design question relevance and process
-
-Q2: Home's broad Obx scope is relevant to RES-105, not the cause of this race;
-it is unchanged. Q3: controlled dependencies make asynchronous tests repeatable,
-but these pagination tests do not answer the RES-106 time-zone question.
-
-Codex implemented the approved HomeController change and tests, ran the
-before/after validation, and wrote this section. Its first test harness used
-pump without requesting a frame while no screen was mounted, so three footer
-assertions did not observe scheduled callbacks. Codex corrected the harness to
-request frames, then used that corrected file for both before/after runs. This
-was a test-harness error caught during execution, not proof of a production
-failure or a claim of independent candidate discovery. Candidate review and
-an honest time estimate remain pending. Other document sections are retained
-as earlier checkpoints under the RES-104-only documentation scope.
-
 ## RES-105 — Home feed rebuilds and oversized decoded images
 
 ### BEFORE evidence (collected manually by the candidate)
@@ -388,8 +338,11 @@ Curated captures: [profile performance](docs/res105/RES-105_before_performance_p
 
 The candidate supplied these real pre-RES-105 DevTools observations. Codex
 did not collect these captures independently. Device, exact capture duration
-and baseline revision were not supplied with the numbers; preserve those
-details with the original captures for the manual comparison.
+and baseline revision were not recorded alongside the numeric summary,
+limiting reproducibility of the timing comparison. The curated images show
+endpoint cache values, final rebuild counts and representative FPS. Initial
+rebuild counts, AFTER start-cache and heap samples also rely on the reported
+manual observations; not every sample appears in these six images.
 
 | Scenario | Start | After scrolling |
 | --- | --- | --- |
@@ -568,20 +521,17 @@ growing after returning to the same viewport with pending loads settled.
 
 ### Edge cases and process
 
-Check orientation/high-DPR screens, return-to-top, empty/today-only feeds,
-flash rail appearing/disappearing, loading/refresh/load-more and detail/cart
-image quality manually. The sizing contract assumes existing 1600 x 1200
+Automated coverage does not establish visual quality on every orientation or
+high-DPR screen, or all refresh/load-more animations and detail/cart images.
+The sizing contract assumes existing 1600 x 1200
 catalog photos; arbitrary future aspect ratios need source metadata or a
 revised sizing policy. A high-density/large viewport can still require the
 full source image. Features/countdowns and backend behavior are unchanged.
 
-Codex diagnosed, implemented and validated the code; the candidate supplied
-both BEFORE and AFTER evidence. No new incorrect design suggestion
-was discovered in these runs; expected failures against the old code are
-not AI mistakes. No example is invented. Time spent awaits an honest estimate.
-The implementation commit was created while AFTER evidence was pending, as
-authorized. This follow-up records the subsequently supplied evidence and
-source audit without changing production code or lowering the cache budget.
+The implementation and evidence were committed separately: the code was
+validated automatically first, and the manual AFTER captures were documented
+when available. No additional production change was justified by the cache
+endpoint measurements.
 
 ## RES-106 — Pickup times and Pickup today
 
@@ -632,15 +582,10 @@ bd5f0d4a992d721db82b03fa690d0e5379964416.
 - Test formatting changed whitespace only after the baseline runs. No emulator
   reproduction or performance measurement is claimed.
 
-### Q3 relevance and limitations
+### Limitations
 
-Q3: feed fixed UTC API fixtures through DealModel/PickupWindowModel, assert
-market labels, and filter using a supplied current instant. Exercise Bangkok
-midnight and month/year boundaries explicitly. Extracting isTodayAt gives the
-production predicate a controllable clock input without changing the device
-timezone or waiting for a particular date. The live getter remains a thin
-wrapper. A future UI test can cover toggling the actual Home chip; this suite
-tests the model predicate and parsed-deal filtering rather than that gesture.
+The tests exercise model/parsed-deal filtering, not the actual Home filter
+gesture. Design Q3 below explains the clock seam and boundary cases.
 
 Today retains the existing documented meaning "pickup starts today", not any
 overlap with today. isOpenNow/untilStart still compare original instants and
@@ -648,13 +593,8 @@ are unchanged. Multiple market timezones/DST would require a store timezone
 contract and a different conversion strategy. No automatic midnight refresh
 of an already visible UI is added. Invalid ISO input handling is unchanged.
 
-### Process
-
-Codex diagnosed, implemented, tested and reviewed this ticket. No new AI
-mistake was deliberately introduced or claimed. The RES-105 source baseline
-was preserved separately under build/res105_baseline_bd5f0d4 before this work;
-RES-105 production code has not been changed or profiled. Time spent still
-requires the candidate's honest estimate; earlier sections remain checkpoints.
+The pre-RES-105 source was preserved under build/res105_baseline_bd5f0d4
+before this time-formatting change, keeping a separate performance baseline.
 
 ## RES-107 — Deep link opens to a crash
 
@@ -686,8 +626,10 @@ The loading guard protects this new async lifecycle; it does not replace
 fetching the missing data. The repository Future itself is not cancellable.
 
 Rejected: catching the null-cast exception and leaving a fallback screen;
-fabricating a partial model from ID; requiring push callers to provide an
-in-memory model; fetching again when Home already supplied the matching deal.
+fabricating a partial model from ID would leave required content/actions
+without their data; push callers cannot supply an existing in-memory model;
+fetching again when Home already supplied the matching deal adds unnecessary
+latency. Loading through the repository handles both entry paths.
 No Home UI, route declarations, bindings or backend changes were needed.
 
 ### Verified evidence
@@ -699,8 +641,8 @@ No Home UI, route declarations, bindings or backend changes were needed.
   The valid no-argument route reproduced the null-to-DealModel cast error;
   normal Home argument navigation passed. No baseline production adapter
   was required for this ticket.
-- Current focused suite: all 10 widget tests passed (exit 0).
-- Current full suite: all 41 tests passed with Flutter 3.27.0 using
+- At RES-107 verification: all 10 focused widget tests passed (exit 0).
+- At that checkpoint: all 41 tests passed with Flutter 3.27.0 using
   flutter test --no-pub (exit 0), including the RES-103 lifecycle tests.
 - Tests use controlled repository Completers, the actual deal route/binding/
   screen and real CartService. They verify ID 42 content, stock, pickup label,
@@ -710,7 +652,7 @@ No Home UI, route declarations, bindings or backend changes were needed.
   recheck for the active deal.
 - dart format on the three changed Dart files reported 0 further changes.
 
-### Limitations and process
+### Limitations
 
 These are deterministic widget tests, not a physical Android push/ADB
 end-to-end run. They substitute a controlled repository and do not validate
@@ -721,41 +663,96 @@ An unknown positive ID uses the same retryable load-error UI as other fetch
 failures. Multiple simultaneous detail routes of the same controller type
 remain outside this ticket's scope.
 
-Codex implemented, tested and reviewed this ticket. One tooling mistake was
-an apply_patch context using a pre-format test declaration; the patch was
-rejected without modifying files. Reading the formatted declaration and
-retrying with matching context resolved it. This was an editing-tool error,
-not a candidate-discovered incorrect design suggestion. No such suggestion
-is invented for the assessment log. Time spent remains pending an honest
-candidate estimate; wall-clock gaps are not counted as active work.
-
 ## AI usage log
 
-Used Codex to explain architecture, interpret logs, propose request-version
-guards, inspect the local diff, draft deterministic tests, and draft these
-notes. The candidate applied the initial controller changes manually in VS
-Code. Codex subsequently created the test file and this draft, then ran the
-authorized before/after validation and updated the evidence. The candidate
-must review and explain the submitted code.
+I used Codex to inspect unfamiliar code, form hypotheses, propose focused
+regression tests and minimal fixes, review diffs, and help document findings.
+I initially edited the search controller in VS Code, then authorized Codex to
+implement and commit ticket-scoped work. Each ticket was reviewed separately.
 
-Two verified examples of wrong or misleading AI advice, including how the
-candidate caught each and what was done instead, still need to be reviewed
-and recorded from the actual conversation. Do not invent examples to meet
-the requirement. Accidental typing into the Flutter SDK is not, by itself,
-an incorrect AI code suggestion.
+The working pattern was: read the problem, reproduce or define a reliable
+reproduction, inspect the causal path, build a regression test, apply the
+smallest fix, run focused and full tests, review the diff and constraints,
+then commit. Some tests were written after implementation and run against an
+isolated pre-fix version; the per-ticket evidence records those comparisons
+rather than claiming a strict test-first sequence throughout.
+
+AI output was checked against compiler errors, test failures, runtime logs,
+source code and repository diffs. Flutter 3.27.0/Dart supplied test and format
+results; Git preserved baseline versions and ticket history. For RES-105,
+I collected BEFORE/AFTER DevTools measurements and screenshots manually.
+Codex interpreted them alongside the source; automated tests alone were not
+used to claim performance improvements. The cache endpoint increased, and
+that result is retained in the diagnosis.
+
+Two concrete AI mistakes illustrate the validation process:
+
+1. **RES-103 — awaiting a void API.** Codex generated `await Get.reset()`.
+   The compiler rejected it because Get.reset returns void in the installed
+   GetX version. Codex removed await and ran the corrected tests against both
+   original and fixed production code. This compile error was not evidence
+   of the production subscription leak.
+2. **RES-104 — an incomplete frame-pumping harness.** Codex's controller-only
+   tests used pump without scheduling a frame when no screen was mounted.
+   Three footer assertions failed because post-frame callbacks had not run.
+   Codex added `tester.binding.scheduleFrame()` before pumping and revalidated
+   the same corrected tests before/after. The production code was not changed
+   to satisfy an incorrect harness.
+
+These mistakes were surfaced by compiler/tests and corrected by Codex, not
+independently discovered by me. They were not deliberately introduced. Test
+failures against the original production bugs are reported separately.
 
 ## Design questions
 
-Q1, Q2 and Q3: pending code investigation and candidate discussion. These
-answers are required before submission.
+**Q1 — Controller versus widget lifecycle.** GetX manages controller
+initialization and onClose according to DI/route configuration. Flutter
+creates and disposes each widget State with its element. One controller can
+serve several States, and a child can disappear while its controller remains.
+In RES-102, PickupCountdown's State created the timer, so State.dispose must
+cancel it; OrdersController.onClose is not its owner. In RES-103, the controller
+created the cart Worker, so onClose must dispose it. Neither lifecycle
+automatically cancels externally registered callbacks: cleanup follows ownership.
+
+**Q2 — Scope of Obx.** A large Obx hurts when a frequently changing value
+affects only a small part of its subtree. RES-105 rebuilt the feed on every
+scroll-offset change just to update elevation or the top button. Separate
+those observers and publish boolean thresholds; let the feed observe its
+data/loading/filter state. Read reactive lists inside Obx before a deferred
+itemBuilder so dependencies are registered. Scope by what changes together,
+then verify rebuild counts and profile timings; more observers are not
+automatically better.
+
+**Q3 — Catching RES-106 before release.** Parse fixed UTC API fixtures and
+assert Bangkok labels and full year/month/day comparisons at an explicit
+current instant. For example, 2026-01-01T23:00Z–2026-01-02T02:30Z must display
+06:00–09:30. Test both sides of 17:00Z (Bangkok midnight), month/year boundaries
+and matching day numbers in different months. Extracting isTodayAt(now) makes
+these tests independent of host timezone and wall clock; isToday remains a
+thin DateTime.now() wrapper. Stored instants stay unchanged. Existing tests
+cover model/parsed-deal filtering; actual Home filter interaction with a
+controlled clock would be an additional UI test.
 
 ## Time spent and next steps
 
-- Setup time: pending the candidate's honest estimate.
-- RES-101 investigation, implementation and verification time: pending the
-  candidate's honest estimate. Screenshot clock times do not establish active
-  working duration.
-- Next: review validation findings with the candidate, complete the
-  RES-101 notes, then prepare one logical commit with the `[RES-101]` prefix.
-- With one more day: provisional priority is lifecycle bug investigation and
-  regression coverage; revisit this answer at submission time.
+I did not track time continuously. These are retrospective rough estimates
+of active work, excluding breaks and waiting time, rather than exact logged
+durations. Profiling and documentation are listed separately from debugging
+and tests to avoid double counting. The total is an overall retrospective
+estimate, not an exact sum of the category range endpoints.
+
+| Activity | Approximate active time |
+| --- | --- |
+| Setup / reading the brief / getting the app running | About 1–2 hours |
+| RES-101 through RES-107, including debugging and tests | About 6–8 hours |
+| RES-105 DevTools profiling, measurements and screenshots | About 2–3 hours |
+| Documentation / solutions.md / final review | About 1–2 hours |
+| Estimated total | Approximately 12–14 hours |
+
+With one more day, I would first validate the current fixes on a physical
+device: deep-link dispatch, search, orders and refresh/load-more. I would
+then inspect live images and native/process memory across repeated scrolling
+cycles and address any failures found. Once that validation is clean, my next
+priority would be one complete Part B feature: F-1, with scoped countdown
+updates, expiry/cart behavior, tests and profiling. Part B is not implemented;
+this is the next-work priority, not a claim of completion.
