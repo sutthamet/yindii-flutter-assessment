@@ -451,6 +451,79 @@ was preserved separately under build/res105_baseline_bd5f0d4 before this work;
 RES-105 production code has not been changed or profiled. Time spent still
 requires the candidate's honest estimate; earlier sections remain checkpoints.
 
+## RES-107 — Deep link opens to a crash
+
+### Reproduction and root cause
+
+Home's Simulate deep link dialog converts
+`rescu://open/deal?id=42&source=push` to `/deal?id=42&source=push` and
+calls Get.toNamed without arguments. Home deal cards pass a DealModel.
+Both paths reach the same route, binding and DealDetailsController, whose
+original onInit blindly casts Get.arguments to DealModel. The null cast
+crashes before a deep-linked deal can load. DealRepo.fetchById already
+supports ID lookup; catalog ID 42 exists. Neither backend nor data need changes.
+
+### Fix, ownership and alternatives
+
+The route controller snapshots ID/source, uses a matching supplied model
+immediately, or loads the ID through DealRepo. The screen waits for that model
+before building the existing full details UI, including Add to bag. It does
+not substitute an error screen for a successfully fetched valid deal.
+Missing/nonpositive/noninteger IDs show an invalid-link message without a
+request. A failed fetch shows an explicit retry action; concurrent retries
+are prevented. A mismatched argument cannot override the route's explicit ID.
+
+The controller owns loading and the cart Worker. Initialization of stock,
+view analytics and Worker happens only after obtaining the model. A response
+arriving after onClose cannot create a late subscription. The RES-103
+onClose Worker disposal is preserved, as are its existing regression tests.
+The loading guard protects this new async lifecycle; it does not replace
+fetching the missing data. The repository Future itself is not cancellable.
+
+Rejected: catching the null-cast exception and leaving a fallback screen;
+fabricating a partial model from ID; requiring push callers to provide an
+in-memory model; fetching again when Home already supplied the matching deal.
+No Home UI, route declarations, bindings or backend changes were needed.
+
+### Verified evidence
+
+- Baseline: archive of commit 2906a854ffb74b64ddc8a917f80cd1d4bc4a37a7
+  under build/res107_before_validation/source, with the new test copied in.
+  Production files in that copy were unmodified HEAD versions.
+- Final focused tests against that baseline: 9 failed / 1 passed (exit 1).
+  The valid no-argument route reproduced the null-to-DealModel cast error;
+  normal Home argument navigation passed. No baseline production adapter
+  was required for this ticket.
+- Current focused suite: all 10 widget tests passed (exit 0).
+- Current full suite: all 41 tests passed with Flutter 3.27.0 using
+  flutter test --no-pub (exit 0), including the RES-103 lifecycle tests.
+- Tests use controlled repository Completers, the actual deal route/binding/
+  screen and real CartService. They verify ID 42 content, stock, pickup label,
+  source analytics, Add to bag, immediate Home navigation, full rescu URI as
+  an initial named route, invalid IDs, failure/retry, leaving during fetch,
+  and mismatched arguments. The successful cart action triggers one stock
+  recheck for the active deal.
+- dart format on the three changed Dart files reported 0 further changes.
+
+### Limitations and process
+
+These are deterministic widget tests, not a physical Android push/ADB
+end-to-end run. They substitute a controlled repository and do not validate
+image downloads or real network transport. Android manifest deep-link intent
+configuration was inspected; device dispatch still merits a manual smoke
+test. The existing post-add availability-request error handling is unchanged.
+An unknown positive ID uses the same retryable load-error UI as other fetch
+failures. Multiple simultaneous detail routes of the same controller type
+remain outside this ticket's scope.
+
+Codex implemented, tested and reviewed this ticket. One tooling mistake was
+an apply_patch context using a pre-format test declaration; the patch was
+rejected without modifying files. Reading the formatted declaration and
+retrying with matching context resolved it. This was an editing-tool error,
+not a candidate-discovered incorrect design suggestion. No such suggestion
+is invented for the assessment log. Time spent remains pending an honest
+candidate estimate; wall-clock gaps are not counted as active work.
+
 ## AI usage log
 
 Used Codex to explain architecture, interpret logs, propose request-version
