@@ -1,9 +1,10 @@
 # Assessment solutions
 
 RES-101 through RES-107 have been implemented and validated as described
-below. Part B features have not been implemented; that decision remains open.
+below. Part B F-1 is implemented with automated coverage; manual device and
+DevTools validation is still required. F-2 and F-3 are not implemented.
 Per-ticket test totals are historical checkpoints; the latest verified full
-suite passed 46 tests on Flutter 3.27.0. Manual checks and limitations are
+suite passed 56 tests on Flutter 3.27.0. Manual checks and limitations are
 identified separately. The retrospective time estimate and remaining work are
 summarized at the end.
 
@@ -663,6 +664,142 @@ An unknown positive ID uses the same retryable load-error UI as other fetch
 failures. Multiple simultaneous detail routes of the same controller type
 remain outside this ticket's scope.
 
+## F-1 — Live flash-sale countdowns
+
+### Design and correctness
+
+The model already supplies an expiry instant, but the rail displayed static
+text and the local bag had no expiry check. `FlashSaleClock`, owned by the
+session-wide CartService, supplies one shared one-second timer and an
+injectable `now` function. Labels use deadline minus current time, rounded up
+to the next second: `mm:ss` below an hour, `hh:mm:ss` from one hour, and
+`Expired` at or after the deadline. Comparing instants leaves RES-106's Bangkok
+calendar/pickup formatting and stored timestamps unchanged.
+
+The rail, shared feed/search card and details use the same countdown widget.
+Expired cards are dimmed and ignore pointer/focus actions; the details Add
+button is disabled. CartService also checks actual time on every add, so a
+tap between ticks cannot bypass expiry. The details controller only shows
+its success snackbar if the add succeeds.
+
+The bag subscribes while it contains flash deals, independently of mounted
+cards. Expiry removes all quantities of expired lines in one batch, recounts
+totals and shows a snackbar naming the removed deals. Non-flash lines remain.
+Checkout checks again before sending; if it removes expired lines, it stops
+so the user can review the changed bag before trying again.
+
+### Performance and lifecycle
+
+Only each countdown's ListenableBuilder/Text rebuilds per second. The expiry
+wrapper observes the clock but calls setState only when its expired boolean
+changes; its prebuilt card child is reused. At expiry the small wrapper or
+details button changes once. Home's list, scroll reactivity, image sizing and
+pagination are unchanged. Tick work scales with mounted listeners and bag
+lines, not all catalog entries; there is one periodic timer, not one per card.
+
+Widgets remove listeners on dispose and replace subscriptions when deadlines
+change. The clock stops after the last listener is removed, including removal
+inside a notification, and releases its timer/lifecycle observer with its
+owner. It pauses on background `paused`/`detached` and checks actual time on
+resume, so missed ticks do not extend a sale. An injected clock remains owned
+by its caller and must be disposed there.
+
+### Rejected alternatives
+
+- A Timer per card duplicates scheduling and cleanup; one timer serves both
+  countdowns and offscreen bag expiry.
+- A clock-dependent Obx around cards or Home repeats RES-105's broad rebuild
+  problem. Text listens separately from the one-time expiry transition.
+- Widget-only expiry callbacks miss bag items after navigation. CartService
+  owns bag validity, and add-time validation closes the gap between ticks.
+- Decrementing a seconds counter drifts across delayed ticks/backgrounding.
+  Subtracting absolute instants gives the current remaining duration instead.
+
+### Verified automated evidence
+
+On Flutter 3.27.0, `flutter test --no-pub test/flash_sale_test.dart` passed all
+10 tests; `flutter test --no-pub` passed all 56 tests (46 existing plus 10 F-1).
+Coverage includes formatting boundaries, fractional seconds and UTC offsets;
+batch/offscreen bag removal; between-tick add and checkout rejection;
+mixed-bag checkout review; resume/disposal; deadline replacement; and the
+real details disabled button and visible snackbar.
+
+With 120 mounted countdowns, text changes while measured parent and expiry
+builder counts remain unchanged before expiry. Expiry updates wrappers once.
+Real rail/feed Card widget instances and the details Scaffold are reused
+across ticks. Unmounting releases listeners, and the test framework detects
+leftover timers. The manual stress target is also mounted in a widget test
+to check all 120 countdowns render and clean up.
+
+These are implementation tests, not a claimed pre-F-1 before/after benchmark.
+Formatting is limited to touched Dart files. Diff/constraint review checks
+backend/data, dependencies and toolchain remain unchanged.
+
+### Manual functional smoke checks
+
+Manual checks in the normal app, in profile mode, confirmed countdowns in
+the flash rail, home-feed card and details screen, and successful Add to bag
+before expiry. The [bag screenshot](docs/f1/F-1_bag_before_expiry.png) shows
+Mystery Thai Feast with quantity 1 and a total of ฿150; it does not prove
+expiry removal or independently capture every preceding navigation step.
+Rail/feed visibility is a reported manual observation, not a separate image
+in this curated set.
+
+The same details countdown reads [22:01 before background](docs/f1/F-1_before_background.png)
+and [21:34 after resume](docs/f1/F-1_after_resume.png). Together with the
+reported background/resume sequence, this supports accounting for elapsed
+real time rather than freezing the remaining duration. It is not a measured
+resume-latency benchmark or evidence of crossing expiry while backgrounded.
+
+Manual natural-expiry bag removal and its notice were **not** waited through
+end-to-end in the normal app. Those behaviors have automated coverage above;
+they must not be described as manually verified.
+
+### DevTools and profile evidence
+
+The stress target is `test/support/flash_sale_profile.dart`, with 120 mounted
+countdowns. The supplied [debug rebuild-stats capture](docs/f1/F-1_debug_rebuild_stats_30s.png)
+shows overall counts of 1 for GetMaterialApp, FlashSaleProfile, Scaffold and
+AppBar, supporting the reported observation that root/container widgets did
+not rebuild every second. FlashSaleCountdown totals 120 and FlashSaleExpiry
+totals 240 across instances; these are aggregate widget counts, not 120 or
+240 builds per individual countdown. The capture is debug-mode evidence of
+rebuild scope, not release/profile performance.
+
+The [profile overview](docs/f1/F-1_profile_performance_overview.png) still
+contains frequent slow frames. A [representative frame detail](docs/f1/F-1_profile_raster_jank_detail.png)
+reports Build 1.4 ms and Raster 59.6 ms, with "Raster Jank Detected". These
+values describe that selected frame only. Scoped rebuilds therefore do not
+establish smooth raster performance, and the screenshots do not identify
+the underlying raster bottleneck or establish a repeatable FPS benchmark.
+
+All 120 labels reached [Expired in the stress fixture](docs/f1/F-1_profile_expired_state.png).
+The [mass-expiry performance capture](docs/f1/F-1_profile_mass_expiry_performance.png)
+still shows slow frames; it is not evidence that simultaneous expiry is
+jank-free. The compact fixture uses fitted text and no feed photos, so it
+does not substitute for a real-feed scrolling profile. RES-105 measurements
+remain historical Part A evidence and are not reused as F-1 results.
+
+### Remaining limitations
+
+Functional implementation and automated checks pass, but the brief's smooth
+100+ countdown performance requirement is **not established** by these
+captures. Follow-up should investigate the raster cost and validate on a
+documented device/setup, then repeat the stress and real-feed profiles.
+Natural-expiry bag removal/notice, including expiry while backgrounded,
+still needs a normal-app manual check. A manual over-one-hour display check
+was not reported; its formatting boundaries are covered by automated tests.
+Do not restart mid-expiry scenario: the fake backend creates relative sale
+deadlines at init.
+
+UI expiry can lag the deadline until the next one-second tick (longer if the
+UI isolate is blocked); add and checkout validate immediately. Device time
+is not a trusted server offset; anti-tampering and persisted bags are outside
+scope. Expired-only mounted widgets can keep the single clock active until
+unmounted. Very long labels, large text settings and real lifecycle transitions
+merit device checks. An already-submitted checkout cannot be recalled by this
+client; the backend result remains authoritative. Reservation rollback is F-3.
+
 ## AI usage log
 
 I used Codex to inspect unfamiliar code, form hypotheses, propose focused
@@ -702,6 +839,14 @@ Two concrete AI mistakes illustrate the validation process:
 These mistakes were surfaced by compiler/tests and corrected by Codex, not
 independently discovered by me. They were not deliberately introduced. Test
 failures against the original production bugs are reported separately.
+
+During F-1, a new test exposed a lifecycle mistake in Codex's initial clock:
+checking ChangeNotifier.hasListeners while removing the last listener inside
+notification left the timer running because the notifier defers updating its
+count. Codex tracked registrations explicitly; the same offscreen-expiry test
+then passed without a leftover timer. An incomplete pickup-window fixture and
+snackbar test pumping were also corrected in the harness, not treated as
+production failures.
 
 ## Design questions
 
@@ -749,10 +894,13 @@ estimate, not an exact sum of the category range endpoints.
 | Documentation / solutions.md / final review | About 1–2 hours |
 | Estimated total | Approximately 12–14 hours |
 
-With one more day, I would first validate the current fixes on a physical
-device: deep-link dispatch, search, orders and refresh/load-more. I would
-then inspect live images and native/process memory across repeated scrolling
-cycles and address any failures found. Once that validation is clean, my next
-priority would be one complete Part B feature: F-1, with scoped countdown
-updates, expiry/cart behavior, tests and profiling. Part B is not implemented;
-this is the next-work priority, not a claim of completion.
+These ranges cover Part A / Part C before F-1. They exclude the subsequent
+F-1 implementation and outstanding manual profiling; no additional active-time
+estimate has been recorded yet.
+
+With one more day, I would first finish F-1's device and profile validation,
+including simultaneous countdowns, expiry notices and background/resume, and
+smoke-test deep links, search, orders and refresh/load-more. I would then inspect
+live images and native/process memory across repeated scrolling cycles and
+address failures before starting another feature. F-2 and F-3 remain
+unimplemented; automated coverage alone does not finish F-1's performance gate.

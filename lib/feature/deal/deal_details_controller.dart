@@ -101,7 +101,7 @@ class DealDetailsController extends GetxController {
   }
 
   void addToCart() {
-    cartService.add(deal);
+    if (!cartService.add(deal)) return;
     Get.snackbar(
       'Added to bag',
       '${deal.name} — pick up ${deal.pickupWindow.label}',

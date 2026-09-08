@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import '../../app_config.dart';
 import '../shared_widget/the_network_image.dart';
+import '../shared_widget/flash_sale_countdown.dart';
 import 'deal_details_controller.dart';
 
 class DealDetailsScreen extends GetView<DealDetailsController> {
@@ -59,6 +60,12 @@ class DealDetailsScreen extends GetView<DealDetailsController> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (deal.flashSaleEndsAt != null)
+                    FlashSaleCountdown(
+                      endsAt: deal.flashSaleEndsAt!,
+                      style: const TextStyle(
+                          color: Colors.red, fontWeight: FontWeight.bold),
+                    ),
                   Text(deal.name,
                       style: const TextStyle(
                           fontSize: 22, fontWeight: FontWeight.bold)),
@@ -162,10 +169,13 @@ class DealDetailsScreen extends GetView<DealDetailsController> {
         color: Colors.white,
         child: SizedBox(
           width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: controller.addToCart,
-            icon: const Icon(Icons.add_shopping_cart),
-            label: const Text('Add to bag'),
+          child: FlashSaleExpiry(
+            endsAt: deal.flashSaleEndsAt,
+            builder: (context, expired, _) => FilledButton.icon(
+              onPressed: expired ? null : controller.addToCart,
+              icon: const Icon(Icons.add_shopping_cart),
+              label: Text(expired ? 'Expired' : 'Add to bag'),
+            ),
           ),
         ),
       ),
