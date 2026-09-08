@@ -384,11 +384,7 @@ as earlier checkpoints under the RES-104-only documentation scope.
 
 Curated captures: [profile performance](docs/res105/RES-105_before_performance_profile.png),
 [447 rebuilds](docs/res105/RES-105_before_rebuild_stats_447.png), and
-[image cache](docs/res105/RES-105_before_image_cache_end_full.png).
-Despite its filename, the included BEFORE cache screenshot shows the START
-values (6 entries / 46,080,000 bytes), not the END values. The END figures
-below remain the candidate's reported measurements, not values visible in
-this particular screenshot.
+[image cache at page 7](docs/res105/RES-105_before_image_cache_end_full.png).
 
 The candidate supplied these real pre-RES-105 DevTools observations. Codex
 did not collect these captures independently. Device, exact capture duration
