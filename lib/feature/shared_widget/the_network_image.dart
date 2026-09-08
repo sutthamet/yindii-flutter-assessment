@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:shimmer/shimmer.dart';
@@ -23,22 +25,41 @@ class TheNetworkImage extends StatelessWidget {
   Widget build(BuildContext context) {
     return ClipRRect(
       borderRadius: borderRadius ?? BorderRadius.zero,
-      child: CachedNetworkImage(
-        imageUrl: url,
+      child: SizedBox(
         width: width,
         height: height,
-        fit: fit,
-        placeholder: (context, _) => Shimmer.fromColors(
-          baseColor: Colors.grey.shade300,
-          highlightColor: Colors.grey.shade100,
-          child: Container(width: width, height: height, color: Colors.white),
-        ),
-        errorWidget: (context, _, __) => Container(
-          width: width,
-          height: height,
-          color: Colors.grey.shade200,
-          child: const Icon(Icons.image_not_supported_outlined),
-        ),
+        child: LayoutBuilder(builder: (context, constraints) {
+          // Catalog photos are 1600 x 1200. Size for BoxFit.cover without
+          // stretching the decoded aspect ratio, including square thumbnails.
+          const aspectRatio = 4 / 3;
+          final logicalWidth =
+              constraints.hasBoundedWidth ? constraints.maxWidth : 0.0;
+          final logicalHeight =
+              constraints.hasBoundedHeight ? constraints.maxHeight : 0.0;
+          final decodeWidth =
+              (math.max(logicalWidth, logicalHeight * aspectRatio) *
+                      MediaQuery.devicePixelRatioOf(context))
+                  .ceil();
+          return CachedNetworkImage(
+            memCacheWidth: decodeWidth > 0 ? math.min(1600, decodeWidth) : null,
+            imageUrl: url,
+            width: width,
+            height: height,
+            fit: fit,
+            placeholder: (context, _) => Shimmer.fromColors(
+              baseColor: Colors.grey.shade300,
+              highlightColor: Colors.grey.shade100,
+              child:
+                  Container(width: width, height: height, color: Colors.white),
+            ),
+            errorWidget: (context, _, __) => Container(
+              width: width,
+              height: height,
+              color: Colors.grey.shade200,
+              child: const Icon(Icons.image_not_supported_outlined),
+            ),
+          );
+        }),
       ),
     );
   }

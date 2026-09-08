@@ -378,6 +378,152 @@ failure or a claim of independent candidate discovery. Candidate review and
 an honest time estimate remain pending. Other document sections are retained
 as earlier checkpoints under the RES-104-only documentation scope.
 
+## RES-105 — Home feed rebuilds and oversized decoded images
+
+### BEFORE evidence (collected manually by the candidate)
+
+The candidate supplied these real pre-RES-105 DevTools observations. Codex
+did not collect these captures independently. Device, exact capture duration
+and baseline revision were not supplied with the numbers; preserve those
+details with the original captures for the manual comparison.
+
+| Scenario | Start | After scrolling |
+| --- | --- | --- |
+| Debug Rebuild Stats: root Obx, Scaffold, SmartRefresher, AppBar and related widgets | approximately 143 builds | approximately 447 builds, increasing together |
+| Debug imageCache.currentSize | 6 | 13 at page 7 / No more data |
+| Debug imageCache.currentSizeBytes | 46,080,000 (reported 43.95 MB) | 99,840,000 (reported 95.21 MB) |
+| Profile Dart memory | approximately 12.7 MB | approximately 12.9 MB at page 7 |
+| Profile scrolling performance | frequent visible jank / slow frames | representative capture approximately 42 FPS average |
+
+The cache's reported MB values correspond to binary MiB conversions. The
+Dart memory observations do NOT show a ballooning Dart heap. No OS kill,
+unbounded memory leak, exact frame-time distribution or measured improvement
+is inferred from these samples.
+
+### Root causes and causal chain
+
+1. HomeController published the raw scroll offset on every scroll event.
+   HomeScreen's root Obx read it as well as feed/filter/loading state, then
+   recreated the entire Scaffold subtree. AppBar needs only offset > 4 and
+   the top button needs only offset > 800. Rebuilding the feed for every
+   intermediate offset also repeated visibleDeals filtering/list copying
+   and recreated the flash section. The supplied correlated rebuild counts
+   support this causal path; the new regression test also fails on the old
+   Scaffold recreation.
+2. FakeApiService supplies 1600 x 1200 catalog images. TheNetworkImage set
+   layout width/height but no decode dimensions, so even small cards/rail
+   images could cache full-resolution decoded pixels. At four bytes per
+   pixel that is 7,680,000 bytes per image: exactly consistent with both
+   supplied cache totals divided by image count. Unnecessarily large image
+   decodes contribute memory and decode/upload work. This is not evidence
+   that compressed disk-cache bytes or Dart heap grew by the same amount.
+3. The vertical feed eagerly constructed the entire DealCard widget list via
+   a spread/map on every rebuild; the work grew with loaded item count.
+   ListView(children: ...) still mounts/layouts elements lazily, so this does
+   NOT mean every card/image was simultaneously mounted/downloaded. This
+   widget-construction overhead is code-supported; its separate FPS cost
+   has not been measured.
+
+The horizontal flash rail already uses ListView.builder. Home owns and
+disposes its ScrollController/RefreshController; no additional subscription
+leak was found here. Shimmer placeholders animate while images load, but no
+capture isolates them as an additional root cause. Existing image caching
+is bounded; approaching its budget alone does not establish a leak. Native/
+external/total-process memory needs separate measurement from Dart memory.
+
+### Fixes and rejected alternatives
+
+Publish two boolean threshold states instead of raw offset. Scope their Obx
+listeners to the AppBar and top button; keep Scaffold outside reactive
+builders. The feed observes only loading/data/filter changes. GetX suppresses
+unchanged boolean notifications. Pagination/request-generation logic from
+RES-104 is unchanged.
+
+Use ListView.builder for header/optional flash rail/cards/trailing spacing.
+Snapshot reactive lists and filter state inside the body Obx, before the
+deferred itemBuilder runs, so list/filter updates still register dependencies.
+Cards have deal-ID keys and are created on demand. The refresh controller,
+callbacks, loading placeholders and existing layout/content are preserved.
+
+Use actual constrained image size and device pixel ratio to request a decoded
+width via memCacheWidth. For this catalog's 4:3 source and BoxFit.cover,
+width is ceil(max(boxWidth, boxHeight * 4/3) * DPR), capped at source width
+1600. Set only width, preserving the decoded aspect ratio; the height term
+avoids undersampling square thumbnails. Infinite layout dimensions are not
+converted to integers. Without a usable bounded dimension the provider keeps
+its original-size behavior. Original URLs, disk cache, fit and placeholders
+are unchanged. The shared helper also sizes existing cart/order/detail
+images consistently; those callers were not edited.
+
+Rejected: clearing the image cache during scroll or reducing its global
+budget (eviction/redecode churn rather than fixing oversized pixels); using
+layout width alone (does not control decode size); forcing both decode
+dimensions (can distort aspect ratio); using logical pixels without DPR
+(blur); throttling whole-feed rebuilds (still unnecessary work); shrinkWrap
+or mounting all cards; redesigning Home or changing backend image URLs.
+
+### Automated verification
+
+Flutter 3.27.0, no package upgrades, flutter test --no-pub:
+
+- The 5 new focused widget tests all fail against an unmodified production
+  archive of pre-RES-105 HEAD 77f584d0d76c1102c62daa9fb4bec44f800fb2f4,
+  with only these test files added. Failures: new Scaffold on scroll,
+  SliverChildListDelegate instead of builder, and absent decode-width hints.
+  Temporary copy/log: build/res105_before_tests (not committed).
+- After: all 5 focused tests pass (exit 0). They cover stable feed/root widget
+  instances across scrolling, AppBar threshold updates, top button behavior,
+  deferred children, filter/data/flash changes including empty lists, and
+  image sizing for DPR/layout changes, square thumbnails, flash rail and
+  the source-size cap.
+- Full suite: all 46 tests pass (exit 0), including the prior pagination,
+  lifecycle, date and deep-link tests. dart format on only the five RES-105
+  Dart files reports 0 further changes.
+- Image tests inspect provider configuration; they do not download images,
+  measure actual decode allocations, or establish FPS/memory improvements.
+
+### AFTER DevTools evidence — PENDING manual collection
+
+No AFTER numbers or screenshots have been collected or claimed. Repeat on
+the same device, orientation/DPR, app mode, filter state, scroll path/speed,
+catalog extent and cache warmness as BEFORE. Restart the app to reset decoded
+memory cache for each run; use the same disk-cache warm/cold policy. Record
+the actual baseline revision and device alongside both sets of captures.
+
+- Debug: capture/reset Rebuild Stats, repeat the original scrolling interval,
+  and compare root/feed build-count deltas. The scoped AppBar/top-button
+  observers may rebuild on threshold crossings; pagination legitimately
+  rebuilds the feed. New visible cards still build normally.
+- Debug: record imageCache.currentSize/currentSizeBytes at start and after
+  page 7 / No more data. Also inspect decoded image dimensions and, if
+  available, liveImageCount/pendingImageCount. Resized variants for different
+  layouts can coexist; LRU cache may still fill its unchanged budget, so a
+  higher entry count or similar final byte total alone does not negate
+  smaller decoded images. Check visual sharpness too.
+- Profile: repeat the original scrolling capture with the same tracing
+  options/duration; record FPS and slow UI/raster frames. Keep rebuild
+  tracing/debug measurements separate from profile frame timings.
+- Profile: capture Dart memory at the same checkpoints (BEFORE 12.7/12.9 MB),
+  and separately native/external/total-process memory where available. Use
+  the same GC policy; do not relabel one metric as another.
+
+### Edge cases and process
+
+Check orientation/high-DPR screens, return-to-top, empty/today-only feeds,
+flash rail appearing/disappearing, loading/refresh/load-more and detail/cart
+image quality manually. The sizing contract assumes existing 1600 x 1200
+catalog photos; arbitrary future aspect ratios need source metadata or a
+revised sizing policy. A high-density/large viewport can still require the
+full source image. Features/countdowns and backend behavior are unchanged.
+
+Codex diagnosed, implemented and validated the code; the candidate supplied
+BEFORE evidence and will collect AFTER. No new incorrect design suggestion
+was discovered in these runs; expected failures against the old code are
+not AI mistakes. No example is invented. Time spent awaits an honest estimate.
+Per the candidate's explicit instruction, this logical code/test/documentation
+commit may be created after automated gates while manual AFTER evidence
+remains pending; the ticket's performance validation is not yet complete.
+
 ## RES-106 — Pickup times and Pickup today
 
 ### Root cause and reproduction
