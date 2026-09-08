@@ -378,6 +378,79 @@ failure or a claim of independent candidate discovery. Candidate review and
 an honest time estimate remain pending. Other document sections are retained
 as earlier checkpoints under the RES-104-only documentation scope.
 
+## RES-106 — Pickup times and Pickup today
+
+### Root cause and reproduction
+
+The API sends correct UTC instants. DateTime.parse preserves that timezone,
+but the original label formatted UTC hour fields directly. For the supplied
+market (Asia/Bangkok, UTC+7), 23:00Z–02:30Z must display 06:00–09:30. The
+original isToday compared only start.day with DateTime.now().day, mixing UTC
+and device-local calendar fields and ignoring month/year. Early morning pickup
+can start on the previous UTC date; equal day numbers in different months or
+years can also be incorrectly accepted.
+
+### Fix and alternatives
+
+Keep the original start/end instants unchanged. Convert UTC fields to the
+catalog's market wall time only for display and calendar comparisons. Compare
+year, month and day in the same market timezone. isToday delegates to
+isTodayAt(DateTime.now()); the explicit-instant method is a deterministic test
+seam and is also used by the parsed-deal filter test.
+
+Device toLocal() was rejected because a traveller's device timezone must not
+change the store's pickup hours. The backend explicitly documents this catalog
+as Asia/Bangkok (UTC+7 with no DST); a timezone database is unnecessary for this
+contract. Changing the stored instants or offsetting duration comparisons
+would corrupt actual time semantics. No backend, assets or package changes.
+
+### Verification evidence
+
+Flutter 3.27.0 / framework 8495dee1fd / Dart 3.6.0 were used. Java was checked
+as Temurin 17.0.20.1. Baseline source commit:
+bd5f0d4a992d721db82b03fa690d0e5379964416.
+
+- Original model in build/res106_before_validation: all 3 label tests failed
+  (exit 1), including expected `06:00 – 09:30`, actual `23:00 – 02:30`.
+- For deterministic before-date validation ONLY, the baseline copy received
+  isTodayAt(now) returning the exact old expression start.day == now.day.
+  This supplies a fixed clock input without correcting the comparison. It is
+  a test adapter, not an unmodified-original-model run. The 6 date tests then
+  yielded 5 failures / 1 pass (exit 1), including the parsed-deal filter
+  expecting ID 1 but selecting ID 2.
+- After: all 31 tests passed with flutter test --no-pub (exit 0): 9 new
+  pickup-window tests plus the previous 22. The tests use fixed UTC instants
+  and explicit ISO offsets, independent of host timezone/current wall clock.
+- Tests cover early mornings, exact market midnight, overnight labels, month/
+  year differences, new year, leap day, equivalent offsets, and parsing deals
+  before applying the same date predicate that the Home getter delegates to.
+- Test formatting changed whitespace only after the baseline runs. No emulator
+  reproduction or performance measurement is claimed.
+
+### Q3 relevance and limitations
+
+Q3: feed fixed UTC API fixtures through DealModel/PickupWindowModel, assert
+market labels, and filter using a supplied current instant. Exercise Bangkok
+midnight and month/year boundaries explicitly. Extracting isTodayAt gives the
+production predicate a controllable clock input without changing the device
+timezone or waiting for a particular date. The live getter remains a thin
+wrapper. A future UI test can cover toggling the actual Home chip; this suite
+tests the model predicate and parsed-deal filtering rather than that gesture.
+
+Today retains the existing documented meaning "pickup starts today", not any
+overlap with today. isOpenNow/untilStart still compare original instants and
+are unchanged. Multiple market timezones/DST would require a store timezone
+contract and a different conversion strategy. No automatic midnight refresh
+of an already visible UI is added. Invalid ISO input handling is unchanged.
+
+### Process
+
+Codex diagnosed, implemented, tested and reviewed this ticket. No new AI
+mistake was deliberately introduced or claimed. The RES-105 source baseline
+was preserved separately under build/res105_baseline_bd5f0d4 before this work;
+RES-105 production code has not been changed or profiled. Time spent still
+requires the candidate's honest estimate; earlier sections remain checkpoints.
+
 ## AI usage log
 
 Used Codex to explain architecture, interpret logs, propose request-version
