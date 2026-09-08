@@ -265,6 +265,119 @@ by Codex, not a claim that the candidate independently caught it. Candidate
 review and the actual time estimate remain pending. Earlier document sections
 are retained as prior checkpoints, per the RES-103-only documentation scope.
 
+## RES-104 — Duplicate deals in the home feed
+
+### Reproduction and root cause
+
+Manual procedure derived from the ticket and code: load Home with Pickup today
+off, trigger load-more at the bottom, then pull-to-refresh before that request
+finishes. Load another page afterward and inspect IDs in Nearby deals (excluding
+the separate flash rail). Backend latency makes this gesture sequence timing
+dependent; no emulator reproduction was performed during this validation.
+
+The deterministic reproduction holds page 2 in flight, completes refresh page 1
+first, then completes the old page 2. The original controller appends that old
+response without checking request ownership. Refresh has already reset _page to
+1, so a subsequent load-more requests page 2 again. Data and the page counter
+then disagree, producing repeated pages and potentially more entries than the
+catalog contains. Conversely, an old response arriving before refresh finishes
+can temporarily append and then be overwritten. The backend's skip/take logic
+is not the source of duplicate data.
+
+_isFetchingMore only prevented simultaneous load-more calls; it did not
+coordinate refresh. An old failure could also execute _page-- against a newer
+feed. Footer completion methods schedule post-frame callbacks, which can
+overwrite a newer request's footer even after the earlier Future has finished.
+
+### Fix and alternatives
+
+HomeController now uses a monotonically increasing request version. Starting a
+refresh invalidates older page requests, and starting each accepted load-more
+also invalidates queued footer updates from the preceding request. This single
+token covers the refresh generation boundary and completion ownership without
+requiring separate feed and footer counters.
+
+Only the current request can accept data/metadata, handle errors, clear flags
+or update the footer. Load-more is blocked during refresh. _page begins at zero
+(no accepted page) and changes only when a current response succeeds. Requests
+use a local nextPage; no speculative increment or rollback is needed.
+
+Refresh keeps the previous accepted data and pagination until success. Failure
+retains that coherent snapshot, reports refreshFailed, and permits retry or
+continued pagination. Successful refresh replaces the snapshot. The footer is
+set to idle when more pages exist, or noMore otherwise, including after a
+previous noMore state. Post-frame footer updates check their request version
+at execution time. Closing the controller invalidates pending pagination work.
+
+Rejected alternatives: deduplicating by ID after append would hide corrupted
+pagination; resetting flags alone would leave stale callbacks able to mutate
+state; ignoring refresh during load-more would discard the user's action;
+waiting for old requests would delay refresh unnecessarily. No backend change,
+package change, Home UI/Obx restructure or RES-105 optimization is included.
+
+### Deterministic tests and verification evidence
+
+Tests instantiate the real HomeController and use a controlled DealRepo with
+Completers, explicit page metadata and distinct IDs for old/new snapshots.
+They call pagination methods directly, rather than exercising initial flash
+loading or mounting HomeScreen. The Flutter test binding explicitly schedules
+frames to execute footer callbacks. Futures and frames are controlled; no
+random delays or real-time sleeps are used.
+
+Before validation used an isolated copy under `build/res104_before_validation/`
+with HomeController replaced only in that copy by HEAD
+`e22b8d5261763d8e97287bcd84640fb667917ec3`. The same final test file was used in
+both runs; the working production file was not reverted.
+
+- Before: `flutter test --no-pub test/home_controller_test.dart` produced
+  10 failed / 1 passed, exit 1. Primary stale-page assertion expected
+  `[10, 20]`, actual `[10, 20, 3, 4]`. Refresh from noMore expected an idle
+  footer but remained noMore. A queued older completion changed a newer
+  loading footer to idle. The empty-catalog case passed before the fix.
+- After: all 11 HomeController tests passed. `flutter test --no-pub` then
+  passed all 22 tests (11 RES-104 plus the existing 11), exit 0, using Flutter
+  3.27.0, framework 8495dee1fd, Dart 3.6.0.
+- Cases cover stale page completion before/after refresh, old success/error
+  while a new load is pending, failed refresh preserving accepted pages,
+  overlapping refreshes, blocked load-more during refresh, noMore reset,
+  failed-page retry, deferred footer ownership, and an empty refreshed catalog.
+- Injected refresh/page failures intentionally produce error logs. Those logs
+  are not suite failures. No manual navigation, memory or frame-rate claim is
+  inferred from the controller tests.
+
+### Edge cases and limitations
+
+- Old requests still finish; their results/errors are ignored, not cancelled.
+- Repeated refreshes accept only the latest request's result. A latest refresh
+  failure preserves the snapshot accepted before those requests.
+- Footer state is deliberately updated after a frame, matching the package's
+  completion timing. Tests verify stale callbacks cannot overwrite newer work.
+- Pagination assumes the supplied backend's page/totalPages contract. This
+  patch does not repair malformed metadata or an independently unstable remote
+  catalog that moves items between offset-based pages.
+- Pagination callbacks are guarded after close, but controller disposal is not
+  separately tested here. Initial flash-load lifecycle behavior is unchanged.
+- Gesture/indicator animation integration still needs manual emulator checking;
+  these tests inspect RefreshController state without mounting SmartRefresher.
+- Failed initial refresh now reports refresh failure locally and leaves zero
+  accepted pages. Full initial-loading UX is not covered by this test suite.
+
+### Design question relevance and process
+
+Q2: Home's broad Obx scope is relevant to RES-105, not the cause of this race;
+it is unchanged. Q3: controlled dependencies make asynchronous tests repeatable,
+but these pagination tests do not answer the RES-106 time-zone question.
+
+Codex implemented the approved HomeController change and tests, ran the
+before/after validation, and wrote this section. Its first test harness used
+pump without requesting a frame while no screen was mounted, so three footer
+assertions did not observe scheduled callbacks. Codex corrected the harness to
+request frames, then used that corrected file for both before/after runs. This
+was a test-harness error caught during execution, not proof of a production
+failure or a claim of independent candidate discovery. Candidate review and
+an honest time estimate remain pending. Other document sections are retained
+as earlier checkpoints under the RES-104-only documentation scope.
+
 ## AI usage log
 
 Used Codex to explain architecture, interpret logs, propose request-version
