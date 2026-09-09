@@ -757,6 +757,8 @@ they must not be described as manually verified.
 
 ### DevTools and profile evidence
 
+**Synthetic stress fixture.**
+
 The stress target is `test/support/flash_sale_profile.dart`, with 120 mounted
 countdowns. The supplied [debug rebuild-stats capture](docs/f1/F-1_debug_rebuild_stats_30s.png)
 shows overall counts of 1 for GetMaterialApp, FlashSaleProfile, Scaffold and
@@ -773,6 +775,12 @@ values describe that selected frame only. Scoped rebuilds therefore do not
 establish smooth raster performance, and the screenshots do not identify
 the underlying raster bottleneck or establish a repeatable FPS benchmark.
 
+Additional selected frames show [frame 484](docs/f1/F-1_profile_slow_frame_484.png)
+with Build 0.3 ms / Raster 56.5 ms and [frame 501](docs/f1/F-1_profile_slow_frame_501.png)
+with Build 0.2 ms / Raster 64.0 ms. These captures show sustained raster-side
+jank despite low build times in the selected frames. They do not establish
+that the production countdown design causes the same pattern in normal use.
+
 All 120 labels reached [Expired in the stress fixture](docs/f1/F-1_profile_expired_state.png).
 The [mass-expiry performance capture](docs/f1/F-1_profile_mass_expiry_performance.png)
 still shows slow frames; it is not evidence that simultaneous expiry is
@@ -780,12 +788,39 @@ jank-free. The compact fixture uses fitted text and no feed photos, so it
 does not substitute for a real-feed scrolling profile. RES-105 measurements
 remain historical Part A evidence and are not reused as F-1 results.
 
+**Real-app profile captures.**
+
+The [idle/home capture](docs/f1/F-1_real_app_profile_idle.png) displays about
+57 FPS average. The [normal-scrolling capture](docs/f1/F-1_real_app_profile_scroll.png)
+displays 52 FPS; the reported scrolling observations were approximately
+52–53 FPS. The [real-app slow-frame capture](docs/f1/F-1_real_app_slow_frame.png)
+displays 53 FPS and flags frame 1494 as raster jank, but its detailed raster
+duration is unavailable. Occasional slow frames remain, without the sustained
+all-red raster pattern visible in the supplied synthetic-fixture captures.
+These are representative manual captures, not deterministic benchmarks,
+guarantees of 60 FPS, or evidence of jank-free behavior.
+
+**What the evidence establishes.**
+
+Automated tests and debug rebuild stats support tightly scoped widget
+rebuilds with 120 countdowns. The selected profile frames show low build
+cost relative to raster cost, and the synthetic fixture exhibits a much
+heavier raster burden than the supplied normal-app captures. This comparison
+does not isolate the underlying cause: fitted text, simultaneous updates,
+rendering setup and other differences have not been measured independently.
+No production fix is justified by these screenshots alone.
+
 ### Remaining limitations
 
 Functional implementation and automated checks pass, but the brief's smooth
 100+ countdown performance requirement is **not established** by these
-captures. Follow-up should investigate the raster cost and validate on a
-documented device/setup, then repeat the stress and real-feed profiles.
+captures. Normal-app results are encouraging but do not demonstrate that
+100+ countdowns were simultaneously visible during those runs. The rebuild
+requirement has supporting evidence; smoothness at that load remains qualified.
+Follow-up should investigate raster cost under a documented device/setup and
+repeat comparable 100+ countdown measurements. Neither the stress fixture
+alone proves normal production performance is bad, nor the normal-app FPS
+captures prove the 100+ countdown smoothness requirement is satisfied.
 Natural-expiry bag removal/notice, including expiry while backgrounded,
 still needs a normal-app manual check. A manual over-one-hour display check
 was not reported; its formatting boundaries are covered by automated tests.
