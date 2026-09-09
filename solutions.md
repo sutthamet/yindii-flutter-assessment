@@ -26,14 +26,17 @@ During the manual investigation, the console showed these completion times:
 | --- | --- |
 | 00:11:09.803 | sus |
 | 00:11:09.838 | sush |
-| 00:11:09.866 | sushu |
+| 00:11:09.866 | sushu (manual typo) |
 | 00:11:10.012 | s |
 | 00:11:10.046 | su |
 | 00:11:11.999 | sushi |
 
-These logs demonstrate older requests completing after newer ones. The last
-query was corrected from `sushu` to `sushi`; these are the actual observed
-queries. A screenshot showed Thai deals under `sushi`, but the available log
+The intended final query was `sushi`. The intermediate `sushu` was my manual
+typing mistake, not an application-generated value or evidence of the
+stale-response bug. The original observed queries and timestamps are preserved
+above. The stale-response diagnosis is supported by older requests completing
+after newer ones and the deterministic regression tests described below.
+A screenshot showed Thai deals under `sushi`, but the available log
 and screenshot timing do not establish which response produced that frame.
 Searching also matches store names and tags, so titles alone are insufficient
 proof of a mismatch.
@@ -753,9 +756,16 @@ reported background/resume sequence, this supports accounting for elapsed
 real time rather than freezing the remaining duration. It is not a measured
 resume-latency benchmark or evidence of crossing expiry while backgrounded.
 
-Manual natural-expiry bag removal and its notice were **not** waited through
-end-to-end in the normal app. Those behaviors have automated coverage above;
-they must not be described as manually verified.
+In the reported manual check, the normal app was left running until flash-sale
+countdowns expired. The [real-app natural-expiry screenshot](docs/f1/F-1_real_app_natural_expiry_state.png)
+shows dimmed flash-sale cards labeled `Expired` and a dimmed nearby-feed deal
+card also labeled `Expired`. The image records the resulting visual state;
+the elapsed wait is the reported manual observation. It does not demonstrate
+bag removal/notice or smooth performance with 100+ countdowns.
+
+Real-app bag removal and its notice at natural expiry were **not** separately
+observed. Those behaviors have automated coverage above and remain manually
+unverified.
 
 ### DevTools and profile evidence
 
