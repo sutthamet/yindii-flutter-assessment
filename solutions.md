@@ -1,8 +1,10 @@
 # Assessment solutions
 
 RES-101 through RES-107 have been implemented and validated as described
-below. Part B F-1 is implemented with automated coverage; manual device and
-DevTools validation is still required. F-2 and F-3 are not implemented.
+below. Part B F-1 is implemented with automated coverage and documented manual
+smoke checks and DevTools captures. Smooth performance with 100+ visible
+countdowns and real-app natural-expiry bag removal remain unverified manually.
+F-2 and F-3 are not implemented.
 Per-ticket test totals are historical checkpoints; the latest verified full
 suite passed 56 tests on Flutter 3.27.0. Manual checks and limitations are
 identified separately. The retrospective time estimate and remaining work are
@@ -926,12 +928,18 @@ estimate, not an exact sum of the category range endpoints.
 | Setup / reading the brief / getting the app running | About 1–2 hours |
 | RES-101 through RES-107, including debugging and tests | About 6–8 hours |
 | RES-105 DevTools profiling, measurements and screenshots | About 2–3 hours |
-| Documentation / solutions.md / final review | About 1–2 hours |
-| Estimated total | Approximately 12–14 hours |
+| Documentation / solutions.md / final review before F-1 | About 1–2 hours |
+| Previous estimate: Part A / RES-105 profiling / Part C before F-1 | Approximately 12–14 hours |
+| F-1 implementation, automated tests and review | About 1.5–2 hours |
+| F-1 manual profiling, screenshots and performance investigation | About 1.5–2 hours |
+| Additional F-1 documentation / final evidence review | About 0.5–1 hour |
+| Additional F-1 work, rounded retrospective estimate | Roughly 3–5 hours |
+| Revised overall retrospective estimate | Approximately 15–19 active hours |
 
-These ranges cover Part A / Part C before F-1. They exclude the subsequent
-F-1 implementation and outstanding manual profiling; no additional active-time
-estimate has been recorded yet.
+The previous 12–14 hour estimate covered Part A, RES-105 profiling and Part C
+before F-1. F-1 added roughly 3–5 active hours, giving a revised overall estimate
+of approximately 15–19 active hours. The F-1 subtotal is rounded; these ranges
+are retrospective estimates, not exact logs, and exclude breaks and waiting.
 
 With one more day, I would first finish F-1's device and profile validation,
 including simultaneous countdowns, expiry notices and background/resume, and
