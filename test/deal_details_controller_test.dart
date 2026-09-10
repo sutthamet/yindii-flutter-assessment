@@ -37,7 +37,7 @@ void main() {
     Get.testMode = true;
     cart = CartService();
     repo = RecordingDealRepo();
-    analytics = AnalyticsService();
+    analytics = AnalyticsService(sendBatch: (_) async {});
   });
 
   tearDown(() {

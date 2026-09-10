@@ -48,7 +48,7 @@ void main() {
     Get.testMode = true;
     repo = Get.put<DealRepo>(ControlledRepo()) as ControlledRepo;
     cart = Get.put(CartService());
-    analytics = Get.put(AnalyticsService());
+    analytics = Get.put(AnalyticsService(sendBatch: (_) async {}));
   });
   tearDown(() {
     Get.reset();

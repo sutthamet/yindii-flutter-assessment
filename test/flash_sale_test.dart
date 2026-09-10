@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 import 'package:rescu/feature/cart/cart_controller.dart';
 import 'package:rescu/feature/deal/deal_details_controller.dart';
 import 'package:rescu/feature/deal/deal_details_screen.dart';
@@ -53,9 +54,14 @@ void main() {
   late FlashSaleClock clock;
   late CartService cart;
   late List<String> notices;
+  late Duration oldVisibilityInterval;
 
   setUp(() {
     Get.testMode = true;
+    oldVisibilityInterval =
+        VisibilityDetectorController.instance.updateInterval;
+    VisibilityDetectorController.instance.updateInterval = Duration.zero;
+    Get.put(AnalyticsService(sendBatch: (_) async {}));
     now = start;
     clock = FlashSaleClock(now: () => now);
     notices = [];
@@ -65,6 +71,8 @@ void main() {
   tearDown(() {
     Get.reset();
     clock.dispose();
+    VisibilityDetectorController.instance.updateInterval =
+        oldVisibilityInterval;
     Get.testMode = false;
   });
 
@@ -242,6 +250,7 @@ void main() {
       expect(tester.widget<IgnorePointer>(pointer).ignoring, isTrue);
     }
     await tester.pumpWidget(const SizedBox.shrink());
+    Get.find<AnalyticsService>().onClose();
     expect(clock.hasListeners, isFalse);
   });
 
@@ -253,7 +262,9 @@ void main() {
     final flash = deal(42, end: start.add(const Duration(seconds: 5)));
     Get.routing.args = flash;
     Get.put(DealDetailsController(
-        dealRepo: Deals(), cartService: cart, analytics: AnalyticsService()));
+        dealRepo: Deals(),
+        cartService: cart,
+        analytics: AnalyticsService(sendBatch: (_) async {})));
     await tester.pumpWidget(const GetMaterialApp(home: DealDetailsScreen()));
     cart.add(flash);
     await tester.pump();

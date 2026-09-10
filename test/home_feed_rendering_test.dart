@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
+import 'package:visibility_detector/visibility_detector.dart';
+import 'package:rescu/service/analytics_service.dart';
 import 'package:pull_to_refresh/pull_to_refresh.dart';
 import 'package:rescu/feature/home/home_controller.dart';
 import 'package:rescu/feature/home/home_screen.dart';
@@ -52,12 +54,19 @@ class FeedRepo extends DealRepo {
 
 void main() {
   late HomeController controller;
+  late Duration oldVisibilityInterval;
   setUp(() {
     Get.testMode = true;
+    oldVisibilityInterval =
+        VisibilityDetectorController.instance.updateInterval;
+    VisibilityDetectorController.instance.updateInterval = Duration.zero;
+    Get.put(AnalyticsService(sendBatch: (_) async {}));
     controller = Get.put(HomeController(dealRepo: FeedRepo()));
   });
   tearDown(() {
     Get.reset();
+    VisibilityDetectorController.instance.updateInterval =
+        oldVisibilityInterval;
     Get.testMode = false;
   });
 
@@ -73,6 +82,7 @@ void main() {
 
   Future<void> finish(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
+    Get.find<AnalyticsService>().onClose();
     await tester.pump();
   }
 

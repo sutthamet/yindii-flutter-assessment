@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 import 'app_config.dart';
+import 'feature/shared_widget/deal_impression.dart';
 import 'repository/deal_repo.dart';
 import 'repository/order_repo.dart';
 import 'repository/store_repo.dart';
@@ -12,13 +14,18 @@ import 'service/fake_api_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Observe every rendered visibility change, including brief threshold dips.
+  VisibilityDetectorController.instance.updateInterval = Duration.zero;
   await initDependencies();
   runApp(const RescuApp());
 }
 
 Future<void> initDependencies() async {
   await Get.putAsync(() => FakeApiService().init(), permanent: true);
-  Get.put(AnalyticsService(), permanent: true);
+  Get.put(
+      AnalyticsService(
+          sendBatch: Get.find<FakeApiService>().sendAnalyticsBatch),
+      permanent: true);
   Get.put(CartService(), permanent: true);
   Get.lazyPut(() => DealRepo(api: Get.find()), fenix: true);
   Get.lazyPut(() => StoreRepo(api: Get.find()), fenix: true);
@@ -36,6 +43,7 @@ class RescuApp extends StatelessWidget {
       theme: AppConfig.theme,
       initialRoute: Routes.home,
       getPages: Routes.pages,
+      navigatorObservers: [impressionRouteObserver],
     );
   }
 }

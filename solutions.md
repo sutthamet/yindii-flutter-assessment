@@ -4,9 +4,12 @@ RES-101 through RES-107 have been implemented and validated as described
 below. Part B F-1 is implemented with automated coverage and documented manual
 smoke checks and DevTools captures. Smooth performance with 100+ visible
 countdowns and real-app natural-expiry bag removal remain unverified manually.
-F-2 and F-3 are not implemented.
+F-2 is implemented with automated coverage and manual analytics, batching and
+profiling evidence. A same-day pre-F-2/current comparison showed no obvious
+scrolling regression under the tested scenario; it is not a guarantee across
+devices or workloads. F-3 is not implemented.
 Per-ticket test totals are historical checkpoints; the latest verified full
-suite passed 56 tests on Flutter 3.27.0. Manual checks and limitations are
+suite passed 82 tests on Flutter 3.27.0. Manual checks and limitations are
 identified separately. The retrospective time estimate and remaining work are
 summarized at the end.
 
@@ -847,6 +850,229 @@ unmounted. Very long labels, large text settings and real lifecycle transitions
 merit device checks. An already-submitted checkout cannot be recalled by this
 client; the backend result remains authoritative. Reservation rollback is F-3.
 
+## F-2 — Impression tracking
+
+### Design and attribution
+
+DealImpression wraps cards at the Home feed, flash rail and search list
+construction sites. VisibilityDetector reports the clipped widget bounds;
+at least 50% starts a one-shot one-second timer. A drop below 50% cancels it.
+Changes that stay above the threshold do not restart it. The attribution
+identity for an in-progress window is (dealId, source, position): changing
+any field cancels the previous window and requests fresh geometry before
+starting again. Each mounted detector has its own key, including simultaneous
+instances of the same deal.
+
+Home uses home_feed and the zero-based deal index excluding headers. The rail
+uses flash_rail and its own index; search uses search and the result index.
+Existing navigation sources and other analytics events retain their behavior.
+Expired but visible cards can qualify; the brief does not exclude them.
+
+AnalyticsService remains session-wide. recordImpression claims the deal ID
+synchronously in a Set before recording or starting delivery work. Thus the
+first qualifying instance supplies the attribution and later instances, routes
+and retries cannot create another local impression for that deal. Session means
+the service's lifetime; starting a new app session permits the deal again.
+
+### Batching and lifecycle ownership
+
+Only deal_impression events enter the delivery queue. Other logEvent calls
+remain local/debug events. The first queued impression starts one 15-second
+timer; later impressions do not extend it. The tenth immediately detaches
+the batch and cancels its timer. Delivery uses the injected sender wired to
+FakeApiService.sendAnalyticsBatch in main.dart. New impressions belong to a
+fresh queue and deadline, even while earlier requests are in flight. Independent
+batches may be delivered concurrently so a slow request cannot hold up another
+batch's 10-event or 15-second trigger.
+
+A failed batch is retained and retried after 15 seconds without recording new
+local impressions or clearing session deduplication. Service onClose cancels
+batch/retry timers and discards unsent in-memory work; a late failed request
+cannot restart retries after closure. Existing in-flight requests cannot be
+cancelled through this API.
+
+The widget owns its dwell timer and route/app observers. Leaving the route,
+covering it with a modal route, leaving the foreground or disposing the widget
+interrupts the window. Returning starts a new window after a fresh visibility
+measurement. Main registers the RouteObserver used by these wrappers. Geometry
+is refreshed by replacing the detector key on attribution/lifecycle changes;
+this can recreate its child subtree on those transitions, not during routine
+visibility callbacks.
+
+### Continuous visibility and performance strategy
+
+The installed visibility_detector normally coalesces callbacks over 500 ms.
+Main sets updateInterval to Duration.zero so rendered changes are processed
+at frame end, including brief threshold dips. Routine callbacks only compare
+visibility/session state and start or cancel one-shot timers. They do not call
+setState, mutate Rx values or rebuild cards. The elapsed timer processes pending
+visibility callbacks and rechecks its window and active state before recording.
+Reactive event-list updates happen only when an impression qualifies.
+
+Existing lazy lists and F-1 countdown boundaries are retained. The 120-wrapper
+test confirms parent/child build counts do not increase when impressions
+qualify. This does not measure visibility geometry overhead, raster work or
+scrolling FPS. The initial manual profile capture showed approximately 60 FPS
+average with occasional raster jank. The subsequent same-day baseline/current
+comparison below showed no obvious scrolling regression in the tested scenario.
+RES-105 and F-1 screenshots are historical evidence, not F-2 before/after results.
+
+### Rejected alternatives
+
+- Sampling only every 500 ms can miss a brief below-threshold frame, violating
+  continuous exposure. End-of-frame callbacks preserve those rendered changes;
+  their individual performance cost is not isolated by the available captures.
+- Per-screen deduplication allows the same deal to be recorded again in search
+  or the rail. A session-wide Set belongs in AnalyticsService instead.
+- Resetting a 15-second debounce on every event can postpone delivery
+  indefinitely. The deadline belongs to the first currently-unsent event.
+- Clearing a shared queue after awaiting delivery can lose impressions that
+  arrived meanwhile. Detach the batch before awaiting and keep new work separate.
+- Rebuilding cards on visibility changes adds unnecessary UI work. The tracker
+  keeps ordinary fields and one-shot timers rather than reactive visibility state.
+
+### Automated verification
+
+Using Flutter 3.27.0 with --no-pub, focused analytics_service_test.dart and
+deal_impression_test.dart passed 26/26 tests (11 service, 15 widget/integration).
+The full suite passed 82/82 tests, including the previous 56 tests.
+
+Final static analysis of all 12 Dart files added or modified for F-2 reported
+0 errors, 7 warnings and 1 info (exit 1). The warnings are existing protected
+hasListeners assertions in flash_sale_test.dart; the info is an existing
+missing-braces lint in home_screen.dart. Analysis of those files at the
+pre-F-2 baseline reproduced the same seven warnings and one info. No new
+diagnostics were introduced by F-2; the broader check is not warning-free.
+
+Tests use controlled Futures and Flutter's fake timer clock. Real clipped
+geometry verifies exactly 50%, 49%, 999 ms versus one second, a 50 ms dip below
+threshold, and changes that remain above threshold. Each attribution field is
+changed independently before expiry. Coverage also includes simultaneous and
+later cross-source deduplication; ten-event and first-event timed flushes;
+arrivals during in-flight sends; retries without duplicate local events;
+new sessions; widget/service disposal; late failures; background/resume;
+page/dialog navigation; correct Home/rail/search properties and positions;
+120 wrappers without parent/child rebuilds; and event visibility in the existing
+Analytics debug screen. Sender spies verify batch payloads and call timing;
+they do not prove real device delivery.
+
+During test development, the compiler caught Codex awaiting the synchronous
+handleAppLifecycleStateChanged method. Removing await corrected the harness.
+Pending-timer checks also exposed missing explicit service cleanup before the
+widget-test invariant check, including in an existing F-1 harness. Cleanup was
+added while retaining the original F-1 behavior assertions. These were harness
+corrections, not evidence of new production lifecycle failures.
+
+### Manual functional and batching evidence
+
+In Analytics debug, manual checks confirmed deal_impression events for
+home_feed, flash_rail and search, with correct deal_id, source and zero-based
+position. Revisiting the same search results in the same app session produced
+no duplicate impressions for those deals. Cross-source deduplication is also
+covered by the automated tests; this manual revisit alone does not prove every
+cross-screen case or the exact one-second threshold.
+
+Android logcat recorded the following simulated batch deliveries:
+
+| First unsent impression | Batch completion log |
+| --- | --- |
+| 16:12:34.828 | [rescu 16:12:50.349] POST /analytics/batch events=3 |
+| 16:16:18.487 | [rescu 16:16:33.811] POST /analytics/batch events=3 |
+
+These are consistent with a 15-second first-event deadline plus simulated
+backend latency. The API logs after that latency, so the timestamps are not
+exact flush-trigger times. Debug events appear when recorded, not when delivery
+succeeds. The ten-event trigger and exact deadline semantics are verified by
+automated tests, not claimed as manually observed here. This endpoint simulates
+delivery; the logs do not establish receipt by an external analytics server.
+
+### Initial manual DevTools evidence
+
+- [Home profile overview](docs/f2/F-2_home_profile_overview.png): approximately
+  60 FPS average in the recorded scenario. This is a representative manual
+  capture, not a deterministic benchmark or a guarantee of smooth scrolling.
+- [Slow frame 3454](docs/f2/F-2_home_profile_slow_frame_3454.png): DevTools shows
+  Raster Jank Detected and approximately 47.3 ms raster time. Occasional raster
+  spikes remain; this capture does not identify their cause or attribute them
+  specifically to impression tracking.
+- [Typical frame 3458](docs/f2/F-2_home_profile_typical_frame_3458.png): a
+  representative non-jank frame, with approximately 1.0 ms UI time and 14.0 ms
+  raster time. UI time is not a measurement of visibility-callback cost alone.
+- [Debug rebuild statistics](docs/f2/F-2_home_rebuild_stats.png): DealImpression
+  at home_screen.dart:115 and DealCard at home_screen.dart:120 each show Overall
+  16 builds: the wrapper did not rebuild more often than its card in this
+  recording. During the manual scenario, the HomeScreen/large Home subtree was
+  observed not to rebuild continuously from visibility updates. The screenshot
+  shows the wrapper/card counts, not a root-widget count or callback frequency.
+  Existing F-1 countdown text ticks are separate from visibility tracking.
+  Debug-mode FPS is not used as performance evidence.
+
+### Same-day baseline/current profile comparison
+
+The pre-F-2 baseline was commit
+`dbe97d570fdc9609904dff837ead45536fa182d4`, prepared in a separate detached
+worktree without changing the uncommitted F-2 implementation. The baseline and
+current F-2 app were then manually profiled on the same day using Flutter 3.27.0,
+Java 17 and emulator-5554 (Android 15/API 35), repeating the same Home scrolling
+scenario in profile mode. This is a fresh A/B pair, not a comparison of the
+baseline against the older approximately 60 FPS capture above.
+
+| Measurement | Pre-F-2 baseline | Current F-2 |
+| --- | --- | --- |
+| Average FPS shown | Approximately 59 | Approximately 59 |
+| Selected slow frame | 1458: Raster Jank Detected | 1384: Raster Jank Detected |
+| Slow-frame UI phases shown | Build about 0.3 ms; Paint about 1.0 ms | Layout <0.1 ms; Paint about 0.1 ms |
+| Slow-frame raster | About 32.5 ms | About 29.5 ms |
+| Selected typical frame | 1469: no jank detected | 1436: no jank detected |
+| Typical-frame UI phases | Build about 0.1 ms; Layout <0.1 ms; Paint about 0.2 ms | Build about 0.1 ms; Layout <0.1 ms; Paint about 0.2 ms |
+| Typical-frame raster | About 10.7 ms | About 11.5 ms |
+
+Baseline evidence: [overview](docs/f2/F-2_baseline_home_profile_overview.png),
+[slow frame 1458](docs/f2/F-2_baseline_home_profile_slow_frame_1458.png),
+[typical frame 1469](docs/f2/F-2_baseline_home_profile_typical_frame_1469.png).
+
+Current F-2 evidence: [overview](docs/f2/F-2_ab_current_home_profile_overview.png),
+[slow frame 1384](docs/f2/F-2_ab_current_home_profile_slow_frame_1384.png),
+[typical frame 1436](docs/f2/F-2_ab_current_home_profile_typical_frame_1436.png).
+
+The comparison showed no obvious regression under the tested scenario: average
+FPS was approximately equal and the selected typical raster times were similar.
+Both runs had raster spikes. The lower selected slow-frame raster time does not
+establish that F-2 improved performance. These are individual representative
+frames, not run-wide percentiles or matched frame-by-frame workloads. Manual
+gestures, cache conditions and emulator scheduling can introduce run-to-run
+variance; zero regression is not conclusively proven.
+
+Together with the rebuild tests and debug observation, this supports marking
+scrolling performance verified for the tested Home scenario. It does not certify
+all devices, search/rail scrolling workloads or jank-free performance. The
+120-wrapper automated test does not substitute for a profile measurement of
+100+ mounted cards.
+
+### Remaining limitations
+
+Exact device-side threshold timing, the ten-event flush, and interruption of
+exposure during route changes/background-resume were not separately validated
+in these manual captures; they have automated coverage.
+
+Visibility is bounding-box based and does not account for opacity or arbitrary
+overlapping widgets. Modal routes/background are gated explicitly, but overlay
+occlusion, transition animations and platform lifecycle timing need device
+validation. Timers run when the Dart isolate can execute; suspension or a blocked
+isolate can delay callbacks beyond the nominal deadline.
+
+Deduplication and unsent/retry batches are in memory only. Retry attempts have
+a fixed 15-second delay with no attempt limit while the service lives; persistent
+failure retains failed payloads. Process termination loses that work. The backend
+has no idempotency key, so an ambiguous delivery failure cannot provide network
+exactly-once guarantees, although local impressions remain once per deal. This
+endpoint currently simulates latency but no delivery failure; failure behavior
+is exercised through the injected sender in tests.
+
+F-2 added approximately 4–5 active hours, including implementation/tests,
+manual verification, profiling, documentation and the baseline/current A/B
+check. The revised retrospective total is recorded below.
+
 ## AI usage log
 
 I used Codex to inspect unfamiliar code, form hypotheses, propose focused
@@ -944,16 +1170,22 @@ estimate, not an exact sum of the category range endpoints.
 | F-1 manual profiling, screenshots and performance investigation | About 1.5–2 hours |
 | Additional F-1 documentation / final evidence review | About 0.5–1 hour |
 | Additional F-1 work, rounded retrospective estimate | Roughly 3–5 hours |
-| Revised overall retrospective estimate | Approximately 15–19 active hours |
+| Previous estimate including F-1, before F-2 | Approximately 15–19 active hours |
+| F-2 implementation/tests, manual verification, profiling, documentation and baseline/current A/B check | About 4–5 active hours |
+| Revised overall retrospective estimate including F-2 | Approximately 19–24 active hours |
 
 The previous 12–14 hour estimate covered Part A, RES-105 profiling and Part C
-before F-1. F-1 added roughly 3–5 active hours, giving a revised overall estimate
-of approximately 15–19 active hours. The F-1 subtotal is rounded; these ranges
-are retrospective estimates, not exact logs, and exclude breaks and waiting.
+before F-1. F-1 added roughly 3–5 active hours, bringing the estimate before F-2
+to approximately 15–19 active hours. F-2 added about 4–5 active hours across
+implementation/tests, manual verification, profiling, documentation and the
+baseline/current A/B check, bringing the overall estimate to approximately
+19–24 active hours. The F-1 subtotal is rounded. These are retrospective rough
+estimates, not exact logs; they exclude breaks and waiting, including time
+spent waiting for builds.
 
-With one more day, I would first finish F-1's device and profile validation,
+With one more day, I would first extend F-1/F-2 validation beyond the recorded scenarios,
 including simultaneous countdowns, expiry notices and background/resume, and
 smoke-test deep links, search, orders and refresh/load-more. I would then inspect
 live images and native/process memory across repeated scrolling cycles and
-address failures before starting another feature. F-2 and F-3 remain
-unimplemented; automated coverage alone does not finish F-1's performance gate.
+address failures before starting another feature. F-3 remains unimplemented;
+automated coverage alone does not finish either feature's performance gate.
