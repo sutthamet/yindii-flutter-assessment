@@ -1,3 +1,4 @@
+import 'reservation_test_support.dart';
 // Manual DevTools stress target; not the submission app's entry point.
 // flutter run --profile -t test/support/flash_sale_profile.dart
 import 'package:flutter/material.dart';
@@ -7,7 +8,7 @@ import 'package:rescu/service/cart_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  Get.put(CartService(), permanent: true);
+  Get.put(CartService(orderRepo: ImmediateOrderRepo()), permanent: true);
   runApp(const GetMaterialApp(home: FlashSaleProfile()));
 }
 

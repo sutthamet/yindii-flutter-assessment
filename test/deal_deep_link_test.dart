@@ -1,3 +1,4 @@
+import 'support/reservation_test_support.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -47,7 +48,7 @@ void main() {
   setUp(() {
     Get.testMode = true;
     repo = Get.put<DealRepo>(ControlledRepo()) as ControlledRepo;
-    cart = Get.put(CartService());
+    cart = Get.put(CartService(orderRepo: ImmediateOrderRepo()));
     analytics = Get.put(AnalyticsService(sendBatch: (_) async {}));
   });
   tearDown(() {
@@ -74,6 +75,7 @@ void main() {
   }
 
   Future<void> finish(WidgetTester tester) async {
+    cart.onClose();
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 3));
   }

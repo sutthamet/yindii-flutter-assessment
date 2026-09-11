@@ -1,3 +1,4 @@
+import 'support/reservation_test_support.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
@@ -44,7 +45,7 @@ void main() {
     oldInterval = VisibilityDetectorController.instance.updateInterval;
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
     analytics = Get.put(AnalyticsService(sendBatch: (_) async {}));
-    Get.put(CartService());
+    Get.put(CartService(orderRepo: ImmediateOrderRepo()));
   });
   tearDown(() {
     Get.reset();

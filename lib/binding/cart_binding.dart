@@ -7,7 +7,6 @@ class CartBinding extends Bindings {
   void dependencies() {
     Get.lazyPut(() => CartController(
           cartService: Get.find(),
-          orderRepo: Get.find(),
         ));
   }
 }

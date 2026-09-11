@@ -1,3 +1,4 @@
+import 'support/reservation_test_support.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
@@ -12,7 +13,6 @@ import 'package:rescu/model/cart_item_model.dart';
 import 'package:rescu/model/deal_model.dart';
 import 'package:rescu/model/order_model.dart';
 import 'package:rescu/repository/deal_repo.dart';
-import 'package:rescu/repository/order_repo.dart';
 import 'package:rescu/service/analytics_service.dart';
 import 'package:rescu/service/cart_service.dart';
 import 'package:rescu/service/fake_api_service.dart';
@@ -32,8 +32,13 @@ DealModel deal(int id, {DateTime? end}) => DealModel.fromJson({
       'flashSaleEndsAt': end?.toIso8601String(),
     });
 
-class Orders extends OrderRepo {
-  Orders() : super(api: FakeApiService());
+class ReservationTestClock extends FlashSaleClock {
+  ReservationTestClock({required super.now});
+  bool get hasActiveListeners => hasListeners;
+}
+
+class Orders extends ImmediateOrderRepo {
+  Orders({required super.now});
   int calls = 0;
   @override
   Future<OrderModel> checkout(List<CartItemModel> items) {
@@ -51,8 +56,9 @@ class Deals extends DealRepo {
 void main() {
   final start = DateTime.utc(2026, 9, 9);
   late DateTime now;
-  late FlashSaleClock clock;
+  late ReservationTestClock clock;
   late CartService cart;
+  late Orders orders;
   late List<String> notices;
   late Duration oldVisibilityInterval;
 
@@ -63,9 +69,11 @@ void main() {
     VisibilityDetectorController.instance.updateInterval = Duration.zero;
     Get.put(AnalyticsService(sendBatch: (_) async {}));
     now = start;
-    clock = FlashSaleClock(now: () => now);
+    clock = ReservationTestClock(now: () => now);
     notices = [];
-    cart = Get.put(CartService(clock: clock, onExpiryNotice: notices.add));
+    orders = Orders(now: () => now);
+    cart = Get.put(CartService(
+        orderRepo: orders, clock: clock, onExpiryNotice: notices.add));
   });
 
   tearDown(() {
@@ -100,9 +108,12 @@ void main() {
       (tester) async {
     final flash = deal(1, end: start.add(const Duration(seconds: 2)));
     cart.add(flash);
+    await tester
+        .pump(); // The first hold must settle before increasing quantity.
     cart.add(flash);
     cart.add(deal(2, end: flash.flashSaleEndsAt));
     cart.add(deal(3));
+    await tester.pump();
     now = start.add(const Duration(seconds: 1));
     await tester.pump(const Duration(seconds: 1));
     expect(cart.itemCount.value, 4);
@@ -112,9 +123,13 @@ void main() {
     expect(cart.itemCount.value, 1);
     expect(cart.total, 50);
     expect(notices.single, contains('Flash 1, Flash 2 expired'));
-    expect(clock.hasListeners, isFalse);
+    // Ordinary deals now also have expiring holds, so the session keeps watching.
+    expect(clock.hasActiveListeners, isTrue);
     await tester.pump(const Duration(seconds: 5));
     expect(notices.length, 1);
+    cart.clear();
+    await tester.pump();
+    expect(clock.hasListeners, isFalse);
   });
 
   testWidgets('add and checkout check actual time before another tick',
@@ -122,8 +137,7 @@ void main() {
     final flash = deal(1, end: start.add(const Duration(seconds: 1)));
     cart.add(flash);
     now = flash.flashSaleEndsAt!;
-    final orders = Orders();
-    await CartController(cartService: cart, orderRepo: orders).checkout();
+    await CartController(cartService: cart).checkout();
     expect(orders.calls, 0);
     expect(cart.items, isEmpty);
     expect(cart.add(flash), isFalse);
@@ -153,11 +167,12 @@ void main() {
     cart.add(deal(1, end: start.add(const Duration(seconds: 1))));
     cart.add(deal(2));
     now = start.add(const Duration(seconds: 1));
-    final orders = Orders();
-    await CartController(cartService: cart, orderRepo: orders).checkout();
+    await CartController(cartService: cart).checkout();
     expect(orders.calls, 0);
     expect(cart.items.single.deal.id, 2);
     expect(notices.length, 1);
+    cart.onClose();
+    await tester.pump();
   });
 
   testWidgets(
@@ -258,7 +273,8 @@ void main() {
       'details countdown disables add, removes bag item, and shows real notice',
       (tester) async {
     await Get.delete<CartService>(force: true);
-    cart = Get.put(CartService(clock: clock));
+    cart = Get.put(CartService(
+        orderRepo: ImmediateOrderRepo(now: () => now), clock: clock));
     final flash = deal(42, end: start.add(const Duration(seconds: 5)));
     Get.routing.args = flash;
     Get.put(DealDetailsController(

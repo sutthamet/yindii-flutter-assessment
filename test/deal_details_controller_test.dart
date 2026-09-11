@@ -1,3 +1,4 @@
+import 'support/reservation_test_support.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:rescu/feature/deal/deal_details_controller.dart';
@@ -35,7 +36,7 @@ void main() {
 
   setUp(() {
     Get.testMode = true;
-    cart = CartService();
+    cart = CartService(orderRepo: ImmediateOrderRepo());
     repo = RecordingDealRepo();
     analytics = AnalyticsService(sendBatch: (_) async {});
   });
@@ -43,6 +44,7 @@ void main() {
   tearDown(() {
     Get.reset();
     // Also release subscriptions from the buggy version during before testing.
+    cart.onClose();
     cart.itemCount.close();
     cart.items.close();
     analytics.events.close();

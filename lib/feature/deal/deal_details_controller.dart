@@ -103,8 +103,8 @@ class DealDetailsController extends GetxController {
   void addToCart() {
     if (!cartService.add(deal)) return;
     Get.snackbar(
-      'Added to bag',
-      '${deal.name} — pick up ${deal.pickupWindow.label}',
+      'Added to bag — reserving',
+      'Checking availability for ${deal.name}.',
       snackPosition: SnackPosition.BOTTOM,
       duration: const Duration(seconds: 2),
     );

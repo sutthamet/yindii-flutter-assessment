@@ -22,5 +22,7 @@ class ReservationModel {
     );
   }
 
-  bool get isExpired => DateTime.now().toUtc().isAfter(expiresAt);
+  bool isExpiredAt(DateTime now) => !expiresAt.isAfter(now);
+
+  bool get isExpired => isExpiredAt(DateTime.now().toUtc());
 }

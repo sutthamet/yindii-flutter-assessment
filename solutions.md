@@ -7,9 +7,11 @@ countdowns and real-app natural-expiry bag removal remain unverified manually.
 F-2 is implemented with automated coverage and manual analytics, batching and
 profiling evidence. A same-day pre-F-2/current comparison showed no obvious
 scrolling regression under the tested scenario; it is not a guarantee across
-devices or workloads. F-3 is not implemented.
+devices or workloads. F-3 is implemented with automated reservation, checkout
+and lifecycle coverage, plus manual reservation and checkout evidence. Remaining
+device checks and unverified emulator performance are identified in F-3 below.
 Per-ticket test totals are historical checkpoints; the latest verified full
-suite passed 82 tests on Flutter 3.27.0. Manual checks and limitations are
+suite passed 124/124 tests on Flutter 3.27.0. Manual checks and limitations are
 identified separately. The retrospective time estimate and remaining work are
 summarized at the end.
 
@@ -1073,6 +1075,193 @@ F-2 added approximately 4–5 active hours, including implementation/tests,
 manual verification, profiling, documentation and the baseline/current A/B
 check. The revised retrospective total is recorded below.
 
+## F-3 — Stock reservations with optimistic UI
+
+### Design and optimistic flow
+
+The previous bag changed local quantities without using the existing reservation
+API. `CartService` now owns holds and checkout for the app session; leaving or
+reopening the bag route does not abandon a request or reset its checkout lock.
+`CartController` delegates checkout, and `OrderRepo` remains unchanged as the
+API adapter. Dependency initialization supplies that repository to the service.
+
+Adding immediately updates the line, total and item count and shows `Reserving…`
+in the bag while reserve runs in the background. Success stores a hold only if
+its ID is nonempty, deal and quantity match, and neither the reservation nor
+flash sale has expired. A 409 or other failure removes the optimistic line and
+explains that it could not be held, without displaying HTTP codes or backend
+messages. Pending quantity controls are disabled, but removing the line remains
+available. Initial zero-stock additions and quantities above the displayed stock
+are rejected locally; backend acceptance is still authoritative.
+
+### Quantity, ownership and stale responses
+
+One reservation covers the entire current quantity of one line. For a quantity
+change, the displayed quantity changes immediately, the old hold is released,
+and a new hold is requested for the whole quantity. Checkout remains disabled
+until this replacement succeeds. This is deliberately release-old-then-reserve-new:
+the API has no atomic adjustment endpoint. There is an availability gap, so a
+failed replacement removes the entire line rather than pretending the released
+hold is still valid. This also applies when decreasing from two to one: a simulated
+409 on the replacement removes the whole line with a user-facing notice. This is
+an accepted tradeoff with the provided API, not a production bug being corrected.
+A failed old-hold release also stops replacement and removes
+the line while cleanup is attempted.
+
+Each operation captures a monotonically increasing version. It may update the
+bag only while that version and the original line object are still current and
+the service is open. Removing a pending line invalidates its operation. A late
+successful reservation is released instead of restoring the line; a stale
+failure cannot remove a newer addition of the same deal.
+
+Removing a held line, including reducing quantity from one to zero, releases its
+hold. Cleanup deduplicates concurrent release attempts for the same ID and makes
+at most three attempts, with five seconds between retries. Replacement first
+attempts its required release directly; if that fails, this cleanup sequence is
+used. Cleanup failure never restores a removed line. It produces a notice that
+the hold will expire automatically. Service closure cancels retry timers and
+removes clock listeners; late successful reservations still receive best-effort
+release without restarting retries or notifying a closed service.
+
+### Expiry and checkout policy
+
+At the absolute reservation deadline, remove the line, notify the user, and do
+not auto-renew. A deliberate new add is required to request another hold. This
+avoids silently extending a stock claim or changing the user's purchase intent.
+The existing shared `FlashSaleClock` checks deadlines while the bag is offscreen
+and immediately on resume. Checkout and quantity edits also recheck actual time,
+so correctness does not depend on the next timer tick. Equality with `expiresAt`
+is treated as expired. F-1 flash expiry independently invalidates the line too.
+
+Checkout requires a nonempty bag with no pending, missing, expired or mismatched
+hold. Its session-wide lock is set before any await and blocks duplicate checkout
+and cart edits. The request uses copied line objects with captured quantities
+and immutable reservation values, so later removal from the live bag cannot
+alter the submitted payload. This is a snapshot isolated from cart edits, not
+a new immutable cart-model type. `OrderRepo` sends `dealId`, `quantity` and
+`reservationId` for every line.
+
+If expiry occurs during checkout, remove the expired line from the visible bag
+and explain that checkout is still being confirmed. Keep the submitted snapshot
+and defer release of its holds until the request resolves: releasing them early
+could invalidate a checkout already being processed. An accepted order is shown
+as confirmed even if its line expired locally during the request. A 410 clears
+all submitted lines and asks the user to add them again; the API does not identify
+which hold failed, so this policy does not guess. Other failures remove expired
+lines but preserve remaining valid holds for a deliberate retry. The lock is
+released in `finally`, and abandoned or successfully submitted holds are cleaned
+up after the request. No checkout is automatically resubmitted.
+
+### Countdown scope and rejected alternatives
+
+`ReservationCountdown` listens to the existing shared clock and rebuilds only its
+text. Cards and the cart list do not subscribe to each second; the service changes
+reactive bag state when an expiry actually removes a line. There is no countdown
+Timer per cart line. The separate one-shot cleanup timers run only after release
+failures and are cancelled on service closure.
+
+- Waiting for reserve before changing the bag would violate optimistic feedback.
+- Reserving the replacement before releasing the original would temporarily hold
+  stock twice and could reject an otherwise valid adjustment. An atomic backend
+  replacement would be preferable, but changing the backend is outside scope.
+- Restoring an old reservation after replacement failure would restore a released
+  hold. Removing the line is more explicit than displaying an invalid reservation.
+- A route-owned request/lock could be lost when navigating away. Session ownership
+  keeps cleanup and double-submit prevention independent of the bag screen.
+- Automatic renewal and releasing a submitted hold immediately at local expiry
+  were rejected for the purchase-intent and checkout-race reasons above.
+
+### Automated verification completed
+
+All commands below used the pinned Flutter 3.27.0 toolchain and `--no-pub`:
+
+| Verification | Result |
+| --- | --- |
+| `cart_reservation_test.dart` / `cart_checkout_test.dart` / `reservation_countdown_test.dart` | 42/42 passed (21 / 15 / 6) |
+| `flash_sale_test.dart` | 10/10 passed |
+| `analytics_service_test.dart` / `deal_impression_test.dart` | 26/26 passed |
+| `deal_deep_link_test.dart` / `deal_details_controller_test.dart` | 12/12 passed |
+| Full `flutter test --no-pub` | 124/124 passed |
+
+Controlled Futures exercise optimistic state before completion, 409 and other
+failures, quantity replacement, removal/re-add races, late cleanup, bounded
+release retries, checkout guards and payloads, duplicate submission across
+controllers, in-flight expiry, 410/non-410 outcomes and service disposal.
+Injectable time covers exact expiry, resume, and interactions between ordinary
+holds and flash sales without waiting five real minutes. Widget tests cover
+pending/held/removed states, an empty bag during checkout, text updates without
+replacing the card/list widgets, 120 shared-clock countdowns, and listener cleanup.
+
+Relevant static analysis covered all 19 changed/new Dart files: zero errors and
+zero F-3-introduced diagnostics remain. Seven protected-member warnings in the
+existing F-1 tests correspond to assertions already present in commit
+`46a023fee7fe7e5e5ca1f35ca2af94387ef84ad2`; they were left in scope as existing
+warnings. Three new missing-braces infos and one new protected-member warning
+were corrected without changing production behavior or dropping the assertion.
+`git diff --check` passed. Forbidden backend/assets and package/toolchain files
+were unchanged. These results establish automated coverage, not zero regressions
+in every device scenario.
+
+### Manual functional evidence
+
+The following scenarios were exercised manually in the running app. Same-run
+captures are preferred where available; the entire set is not one continuous
+trace. Request logs are paired with UI outcomes where possible; observations
+from different requests are identified separately. Filenames and POST/DELETE
+logs alone do not establish a successful outcome or the reason for cleanup.
+
+| Scenario | Observed evidence and scope |
+| --- | --- |
+| Add feedback | The [add-feedback screenshot](docs/f3/f3_optimistic_add_reserving_ui.png) shows the snackbar `Added to bag — reserving`, but the line already displays `Reserved for 05:00`. It supports visible feedback, not that the reserve Future was still pending when captured. Controlled-Future and widget tests establish the optimistic ordering. |
+| Reservation creation | The [same-run reserve log](docs/f3/f3_reservation_create_same_run.png) shows `POST /reservations dealId=8 qty=1` at 04:38:38.079. The accompanying [success UI](docs/f3/f3_reservation_success_ui.png) shows Golden Bakery Bundle, quantity 1 and `Reserved for 04:41`, supporting an accepted reservation. The POST alone does not prove success. |
+| Quantity decrease and replacement | The same-run [before UI](docs/f3/f3_quantity_decrease_before_ui.png) shows Surprise Vegan Bundle at quantity 2, total ฿118; the [after UI](docs/f3/f3_quantity_decrease_after_ui.png) shows quantity 1, total ฿59 and `Reserved for 04:59`. The [release log](docs/f3/f3_quantity_decrease_delete_log.png) records DELETE of `res_41` at 04:52:23.708, followed by the [replacement log](docs/f3/f3_quantity_decrease_rereserve_log.png), `POST /reservations dealId=23 qty=1` at 04:52:24.675, both under PID 9751. These support the observed 2 → 1 replacement; the held state in the after UI supports acceptance, not the POST alone. |
+| User-initiated removal | The [before UI](docs/f3/f3_remove_line_before_ui.png) shows Last-call Bakery Feast with `Reserved for 04:55`; the [after UI](docs/f3/f3_remove_line_after_ui.png) shows an empty bag at 04:49. The accompanying [release log](docs/f3/f3_remove_line_release_log.png) records DELETE of `res_39` at 04:49:54.899. Together with the manual remove action, these support removal and cleanup while the hold was still valid; DELETE alone does not identify its trigger. |
+| Countdown and expiry while staying in the app | The same-run expiry group shows Last-call Bakery Bag at [00:01](docs/f3/f3_reservation_expiry_00_01_ui.png), then an [empty bag with an expiry/removal notice](docs/f3/f3_reservation_expiry_removed_ui.png) at 04:21. The [cleanup log](docs/f3/f3_reservation_expiry_auto_remove_log_same_run.png) records DELETE of `res_31` at 04:21:43.355. Together with the observed manual scenario, these support expiry removal, notice and cleanup; DELETE alone does not prove the trigger. |
+| Reservation failure and rollback | A [reserve 409 log](docs/f3/f3_reservation_409_failure.png) records the simulated rejection at 03:41:35.931. The [rollback UI](docs/f3/f3_reservation_409_ui_message.png), captured at 03:46, shows an empty bag and the non-technical message: "We could not hold Mystery Thai Feast. It was removed from your bag. Please try again." These are supporting observations from manual verification, not presented as one request's continuous trace. |
+| Successful checkout | The [confirmation UI](docs/f3/f3_checkout_success_ui.png) shows `Order #9151 confirmed` and an empty bag at 04:39. The accompanying [cleanup log](docs/f3/f3_checkout_success_cleanup_log.png) records DELETE of `res_35` at 04:39:01.683. The UI supports the successful outcome; `dealId`, `quantity` and `reservationId` in the checkout payload are verified by the code and payload test, not these screenshots. |
+| Expired reservation at checkout | The same-run group shows Surprise Indian Box at [00:05](docs/f3/f3_checkout_410_near_expiry_ui.png), followed by [Confirming your order…](docs/f3/f3_checkout_410_confirming_ui.png) with an expiry/removal notice explaining that checkout is still being confirmed. The [error log](docs/f3/f3_checkout_410_error_same_run.png) records checkout at 04:31:51.309 and `Reservation expired` 410 at 04:31:51.310; the [cleanup log](docs/f3/f3_checkout_410_cleanup_same_run.png) records DELETE of `res_33` at 04:31:51.637, both under PID 9751. The [result UI](docs/f3/f3_checkout_410_result_ui.png) shows an empty bag but still displays the earlier expiry/confirmation notice, not the final 410-specific message asking the user to add items again. |
+
+Screenshots support the observed states and log ordering;
+checkout payload validation, exact expiry boundaries and protection against
+other async interleavings remain code/test-based claims described above.
+
+### Limitations and remaining manual verification
+
+The captures do not establish optimistic timing before the reserve Future
+completes, remove-during-reserve races, background/resume, duplicate checkout,
+navigation during checkout, non-410 recovery or release retries. These have
+automated coverage; manual removal of an already-held line does not establish
+remove-during-reserve behavior. The natural-expiry notice and in-flight checkout
+expiry notice are visible, but the final 410-specific re-add message is not
+captured and remains code/test-based evidence. F-3 emulator performance has not
+been manually verified. Existing F-1/F-2 captures remain historical evidence,
+not measurements of F-3 performance.
+
+Reservation state and cleanup retries are in memory only and are not restored
+after process death. Outstanding requests are not cancelled at the transport
+layer; stale responses are ignored and successful late holds are released.
+Requests have no additional client timeout; a Future that never resolves can
+leave a line or checkout pending. Failed cleanup is best effort, relying on
+expiry to end validity rather than guaranteeing immediate backend deletion.
+
+The fake backend stores holds but does not subtract aggregate reserved quantities
+from availability, and checkout does not validate a hold's deal/quantity pairing.
+The client checks those fields, but these tests cannot prove true multi-user
+overselling prevention. The backend also has no checkout idempotency key or
+order-status reconciliation for an ambiguous network failure. The session lock
+prevents overlapping client submissions; it does not guarantee exactly-once
+payment across process death or an unknown delivery outcome. No backend code was
+changed to conceal these limitations.
+
+F-3 active time is approximately 3–5 hours: about 1–2 hours for analysis,
+implementation, test writing and fixing test issues, plus about 2–3 hours for
+manual verification and evidence work. The manual estimate includes exercising
+add/reserve, quantity changes, remove/release, natural expiry, 409 rollback,
+successful checkout and checkout 410 in the emulator, checking terminal/API
+logs, and capturing and organizing evidence. These are retrospective rough
+estimates, excluding passive countdown waiting, build/waiting time, breaks and
+waiting for Codex/tool usage resets.
+
 ## AI usage log
 
 I used Codex to inspect unfamiliar code, form hypotheses, propose focused
@@ -1172,20 +1361,27 @@ estimate, not an exact sum of the category range endpoints.
 | Additional F-1 work, rounded retrospective estimate | Roughly 3–5 hours |
 | Previous estimate including F-1, before F-2 | Approximately 15–19 active hours |
 | F-2 implementation/tests, manual verification, profiling, documentation and baseline/current A/B check | About 4–5 active hours |
-| Revised overall retrospective estimate including F-2 | Approximately 19–24 active hours |
+| Previous overall retrospective estimate including F-2 | Approximately 19–24 active hours |
+| F-3 analysis, implementation, test writing and fixing test issues | About 1–2 active hours |
+| F-3 manual verification, log checks, and capturing/organizing evidence | About 2–3 active hours |
+| Total F-3 work, retrospective estimate | Approximately 3–5 active hours |
+| Revised overall retrospective estimate including F-3 | Approximately 22–29 active hours |
 
 The previous 12–14 hour estimate covered Part A, RES-105 profiling and Part C
 before F-1. F-1 added roughly 3–5 active hours, bringing the estimate before F-2
 to approximately 15–19 active hours. F-2 added about 4–5 active hours across
 implementation/tests, manual verification, profiling, documentation and the
-baseline/current A/B check, bringing the overall estimate to approximately
-19–24 active hours. The F-1 subtotal is rounded. These are retrospective rough
-estimates, not exact logs; they exclude breaks and waiting, including time
-spent waiting for builds.
+baseline/current A/B check, bringing the pre-F-3 estimate to approximately
+19–24 active hours. F-3 adds approximately 3–5 active hours, including about
+1–2 hours of analysis/implementation/tests and about 2–3 hours of manual
+verification, log checks and evidence work. The revised overall estimate is
+approximately 22–29 active hours. The F-1 subtotal is rounded. These are
+retrospective rough estimates, not exact logs; they exclude passive countdown
+waiting, build/waiting time, breaks and waiting for Codex/tool usage resets.
 
-With one more day, I would first extend F-1/F-2 validation beyond the recorded scenarios,
-including simultaneous countdowns, expiry notices and background/resume, and
-smoke-test deep links, search, orders and refresh/load-more. I would then inspect
-live images and native/process memory across repeated scrolling cycles and
-address failures before starting another feature. F-3 remains unimplemented;
-automated coverage alone does not finish either feature's performance gate.
+With one more day, I would first extend F-3 manual verification to the remaining
+resume, in-flight request and navigation cases, then extend F-1/F-2 validation beyond
+the recorded scenarios and smoke-test deep links, search, orders and refresh/load-more.
+I would then inspect live images and native/process memory across repeated
+scrolling cycles and address observed failures. Automated coverage alone does
+not establish device-side performance or complete these manual checks.
